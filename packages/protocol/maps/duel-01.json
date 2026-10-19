@@ -1,0 +1,187 @@
+{
+  "mapId": "duel-01",
+  "version": 1,
+  "width": 17,
+  "height": 17,
+  "hint": "1v1 决斗：17×17 小图，全图唯一提交点在正中央，想得分就必须进广场打一场",
+  "coordinateSystem": "左上角为原点(0,0)，x 向右(东)，y 向下(南)；N=(0,-1) E=(+1,0) S=(0,+1) W=(-1,0)",
+  "symmetry": "水平镜像 + 垂直镜像 => 北/南/西/东四个出生点完全等价；1v1 固定取南北对峙（座次由赛前抽签决定）",
+  "legend": {
+    ".": "平地 plain",
+    "#": "墙 wall（阻挡移动，阻挡视线）",
+    "~": "水 water（阻挡移动，不阻挡视线；本图没有）",
+    "f": "森林 forest（可通行，阻挡视线，站在其中受击伤害减半且远处不可见）",
+    "S": "出生点 spawn",
+    "B": "弹药补给点 ammoDepot",
+    "G": "加油点 fuelStation",
+    "R": "资源点 resourceNode",
+    "D": "资源提交点 depositPoint"
+  },
+  "grid": [
+    "#################",
+    "#...............#",
+    "#.....B.S.B.....#",
+    "#.......f.......#",
+    "#...ff..G..ff...#",
+    "#..ffR..f..Rff..#",
+    "#.B...........B.#",
+    "#.....#...#.....#",
+    "#.SfGf.RDR.fGfS.#",
+    "#.....#...#.....#",
+    "#.B...........B.#",
+    "#..ffR..f..Rff..#",
+    "#...ff..G..ff...#",
+    "#.......f.......#",
+    "#.....B.S.B.....#",
+    "#...............#",
+    "#################"
+  ],
+  "gridNote": "1v1 专用图（spawnsFor1v1 取南北两个出生点）。全图唯一的提交点(8,8)在正中央，两个高产资源点(7,8)(9,8)紧贴其两侧；四个角落各有一个低产出前哨资源点(5,5)等。想得分必须踏入中央广场并占据那一个格子 —— 这是本图\"必然打起来\"的设计核心。",
+  "spawns": [
+    {
+      "x": 8,
+      "y": 2
+    },
+    {
+      "x": 8,
+      "y": 14
+    },
+    {
+      "x": 2,
+      "y": 8
+    },
+    {
+      "x": 14,
+      "y": 8
+    }
+  ],
+  "spawnsFor1v1": [
+    1,
+    2
+  ],
+  "ammoDepots": [
+    {
+      "x": 6,
+      "y": 2
+    },
+    {
+      "x": 10,
+      "y": 2
+    },
+    {
+      "x": 2,
+      "y": 6
+    },
+    {
+      "x": 14,
+      "y": 6
+    },
+    {
+      "x": 2,
+      "y": 10
+    },
+    {
+      "x": 14,
+      "y": 10
+    },
+    {
+      "x": 6,
+      "y": 14
+    },
+    {
+      "x": 10,
+      "y": 14
+    }
+  ],
+  "fuelStations": [
+    {
+      "x": 8,
+      "y": 4
+    },
+    {
+      "x": 4,
+      "y": 8
+    },
+    {
+      "x": 12,
+      "y": 8
+    },
+    {
+      "x": 8,
+      "y": 12
+    }
+  ],
+  "resourceNodes": [
+    {
+      "id": "R1",
+      "x": 7,
+      "y": 8,
+      "kind": "center",
+      "capacity": 10,
+      "initial": 10,
+      "regenEveryRounds": 2
+    },
+    {
+      "id": "R2",
+      "x": 9,
+      "y": 8,
+      "kind": "center",
+      "capacity": 10,
+      "initial": 10,
+      "regenEveryRounds": 2
+    },
+    {
+      "id": "R3",
+      "x": 5,
+      "y": 5,
+      "kind": "home",
+      "capacity": 6,
+      "initial": 6,
+      "regenEveryRounds": 8
+    },
+    {
+      "id": "R4",
+      "x": 11,
+      "y": 5,
+      "kind": "home",
+      "capacity": 6,
+      "initial": 6,
+      "regenEveryRounds": 8
+    },
+    {
+      "id": "R5",
+      "x": 5,
+      "y": 11,
+      "kind": "home",
+      "capacity": 6,
+      "initial": 6,
+      "regenEveryRounds": 8
+    },
+    {
+      "id": "R6",
+      "x": 11,
+      "y": 11,
+      "kind": "home",
+      "capacity": 6,
+      "initial": 6,
+      "regenEveryRounds": 8
+    }
+  ],
+  "depositPoints": [
+    {
+      "x": 8,
+      "y": 8
+    }
+  ],
+  "distanceReference_P1": {
+    "note": "以 1 号出生点(8,2)（北）为例的 4 邻域步数；地图水平+垂直镜像，四向等价，南北对峙时双方距离完全相同。",
+    "spawn_to_ammoDepot": 2,
+    "spawn_to_fuelStation": 2,
+    "spawn_to_homeResourceNode": 6,
+    "spawn_to_centerResourceNode": 7,
+    "spawn_to_deposit": 6,
+    "spawn_to_oppositeSpawn": 12,
+    "centerResourceNode_to_deposit": 1,
+    "homeResourceNode_to_deposit": 6
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "ai-game",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --import tsx --test \"packages/*/test/*.test.ts\" \"apps/*/test/*.test.ts\"",
+    "cli": "node --import tsx tools/cli/src/index.ts",
+    "dev:server": "node --import tsx apps/server/src/index.ts",
+    "dev:web": "pnpm --filter @ai-game/web dev",
+    "build:web": "pnpm --filter @ai-game/web build",
+    "verify": "node --import tsx tools/cli/src/index.ts verify-map && node --import tsx tools/cli/src/index.ts check-docs",
+    "help": "node --import tsx tools/cli/src/index.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

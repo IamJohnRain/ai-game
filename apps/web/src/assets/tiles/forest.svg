@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- 森林（可通行、挡视线、提供隐蔽）：俯视树冠丛。半透明树冠 + 右下树影 + 透出的地面，强调"可通行"而非硬障碍；
+       跨格树冠做对边包裹复制，相邻森林格天然无缝。 -->
+  <defs>
+    <linearGradient id="forestGround" x1="0" y1="0" x2="0.2" y2="1">
+      <stop offset="0" stop-color="#1d3f27"/>
+      <stop offset="1" stop-color="#152e1c"/>
+    </linearGradient>
+    <radialGradient id="forestCanopy" cx="0.38" cy="0.32" r="0.72">
+      <stop offset="0" stop-color="#4d9a5e"/>
+      <stop offset="0.42" stop-color="#2c6c3b"/>
+      <stop offset="0.78" stop-color="#1f4a2e"/>
+      <stop offset="1" stop-color="#143520"/>
+    </radialGradient>
+  </defs>
+  <rect x="0" y="0" width="100" height="100" fill="url(#forestGround)"/>
+  <g opacity="0.9">
+    <ellipse cx="20" cy="44" rx="14" ry="9" fill="#12291a" opacity="0.55"/>
+    <polygon points="46,20 62,18 66,32 50,34" fill="#12291a" opacity="0.5"/>
+    <ellipse cx="80" cy="52" rx="12" ry="10" fill="#12291a" opacity="0.45"/>
+    <ellipse cx="44" cy="62" rx="16" ry="10" fill="#173020" opacity="0.5"/>
+    <polygon points="26,60 40,58 44,72 30,76" fill="#2b5f38" opacity="0.3"/>
+    <ellipse cx="74" cy="20" rx="10" ry="8" fill="#2b5f38" opacity="0.26"/>
+    <ellipse cx="62" cy="88" rx="12" ry="7" fill="#2b5f38" opacity="0.24"/>
+  </g>
+  <g fill="#0b2013" opacity="0.5">
+    <circle cx="32" cy="33" r="22"/>
+    <circle cx="45" cy="41" r="15"/>
+    <circle cx="80" cy="37" r="23"/>
+    <circle cx="68" cy="45" r="14"/>
+    <circle cx="36" cy="83" r="22"/>
+    <circle cx="48" cy="75" r="15"/>
+    <circle cx="8" cy="57" r="20"/>
+    <circle cx="20" cy="49" r="13"/>
+    <circle cx="108" cy="57" r="20"/>
+    <circle cx="58" cy="9" r="19"/>
+    <circle cx="48" cy="19" r="13"/>
+    <circle cx="58" cy="109" r="19"/>
+  </g>
+  <g fill="url(#forestCanopy)" fill-opacity="0.88" stroke="#16391f" stroke-width="3">
+    <circle cx="26" cy="26" r="21"/>
+    <circle cx="39" cy="34" r="14"/>
+    <circle cx="74" cy="30" r="22"/>
+    <circle cx="62" cy="38" r="13"/>
+    <circle cx="30" cy="76" r="21"/>
+    <circle cx="42" cy="68" r="14"/>
+    <circle cx="2" cy="50" r="19"/>
+    <circle cx="14" cy="42" r="12"/>
+    <circle cx="102" cy="50" r="19"/>
+    <circle cx="52" cy="2" r="18"/>
+    <circle cx="42" cy="12" r="12"/>
+    <circle cx="52" cy="102" r="18"/>
+  </g>
+  <g fill="none" stroke-linejoin="round" stroke-width="5" opacity="0.45">
+    <path d="M 20 22 L 34 30 L 30 40" stroke="#12331d"/>
+    <path d="M 70 36 L 84 30" stroke="#12331d"/>
+    <path d="M 26 78 L 40 70 L 44 80" stroke="#12331d"/>
+    <path d="M 2 56 L 14 50" stroke="#12331d"/>
+    <path d="M 46 12 L 58 18" stroke="#12331d"/>
+  </g>
+  <g fill="#8fd39c" opacity="0.22">
+    <ellipse cx="24" cy="20" rx="8" ry="5"/>
+    <ellipse cx="76" cy="24" rx="7" ry="5"/>
+    <ellipse cx="34" cy="70" rx="8" ry="5"/>
+    <ellipse cx="52" cy="10" rx="7" ry="4"/>
+  </g>
+</svg>

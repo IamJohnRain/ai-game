@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- 坦克（俯视，朝上）。车体/车体暗部颜色由代码替换；履带固定中性深灰。不画炮管——炮管由 Canvas 从座圈中心动态叠加，
+       座圈中心的深色圆盘就是炮管根部。整体落在 7..93（约 86×86），相邻坦克不会糊在一起。 -->
+  <!-- 履带 -->
+  <g fill="#4b535f" stroke="#232830" stroke-width="5" stroke-linejoin="round">
+    <rect x="9.5" y="9.5" width="16" height="81" rx="7"/>
+    <rect x="74.5" y="9.5" width="16" height="81" rx="7"/>
+  </g>
+  <!-- 履带纹 -->
+  <g fill="#232830" opacity="0.75">
+    <rect x="12" y="16" width="11" height="8" rx="2"/>
+    <rect x="12" y="31" width="11" height="8" rx="2"/>
+    <rect x="12" y="46" width="11" height="8" rx="2"/>
+    <rect x="12" y="61" width="11" height="8" rx="2"/>
+    <rect x="12" y="76" width="11" height="8" rx="2"/>
+    <rect x="77" y="16" width="11" height="8" rx="2"/>
+    <rect x="77" y="31" width="11" height="8" rx="2"/>
+    <rect x="77" y="46" width="11" height="8" rx="2"/>
+    <rect x="77" y="61" width="11" height="8" rx="2"/>
+    <rect x="77" y="76" width="11" height="8" rx="2"/>
+  </g>
+  <!-- 车体 -->
+  <rect x="26" y="15" width="48" height="70" rx="9" fill="__BODY__" stroke="__BODY_DARK__" stroke-width="6" stroke-linejoin="round"/>
+  <!-- 车体细节：首上装甲板、后部动力舱与散热口（用半透明黑白叠加，不改占位符） -->
+  <polygon points="30,21 70,21 63,33 37,33" fill="#ffffff" fill-opacity="0.18"/>
+  <path d="M 31 34 L 69 34" fill="none" stroke="#000000" stroke-width="4" opacity="0.25"/>
+  <rect x="31" y="62" width="38" height="20" rx="4" fill="#000000" fill-opacity="0.16"/>
+  <rect x="35" y="66" width="13" height="13" rx="2" fill="#000000" opacity="0.3"/>
+  <rect x="52" y="66" width="13" height="13" rx="2" fill="#000000" opacity="0.3"/>
+  <!-- 炮塔座圈（居中；炮管由 Canvas 从中心叠加） -->
+  <circle cx="50" cy="50" r="19" fill="__BODY__" stroke="__BODY_DARK__" stroke-width="6"/>
+  <circle cx="50" cy="50" r="11" fill="#0b0e14" fill-opacity="0.6" stroke="__BODY_DARK__" stroke-width="4"/>
+  <g fill="#000000" opacity="0.25">
+    <circle cx="61.3" cy="61.3" r="4"/>
+    <circle cx="38.7" cy="61.3" r="4"/>
+    <circle cx="61.3" cy="38.7" r="4"/>
+    <circle cx="38.7" cy="38.7" r="4"/>
+  </g>
+</svg>

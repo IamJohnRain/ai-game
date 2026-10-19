@@ -1,0 +1,23 @@
+# 依赖与构建产物
+node_modules/
+dist/
+apps/web/dist/
+tsconfig.tsbuildinfo
+
+# 运行时数据与密钥（绝不入库）
+# data/：SQLite 库、master.key、自定义地图；logs/：部署后的日志目录
+data/
+logs/
+*.log
+*.seed.db
+
+# 本地配置（环境变量覆盖，可能含 AI_GAME_MASTER_KEY）
+.env
+.env.local
+.env.*.local
+
+# 编辑器/系统
+.DS_Store
+.idea/
+.vscode/
+*.iml

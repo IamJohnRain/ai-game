@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- 弹药补给点：撬开的弹药箱（箱体 + 受光箱盖 + 琥珀束带与卡扣）后方露出两发炮弹，整体以琥珀色为主。 -->
+  <defs>
+    <linearGradient id="ammoCrate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#544826"/>
+      <stop offset="0.45" stop-color="#3d3420"/>
+      <stop offset="1" stop-color="#231e11"/>
+    </linearGradient>
+    <linearGradient id="ammoShell" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffe0a0"/>
+      <stop offset="0.45" stop-color="#f0a72c"/>
+      <stop offset="1" stop-color="#9d6a18"/>
+    </linearGradient>
+  </defs>
+  <ellipse cx="50" cy="82" rx="36" ry="8" fill="#0b0e14" opacity="0.45"/>
+  <!-- 露出的炮弹（下半截被弹药箱压住） -->
+  <g stroke="#6b4a12" stroke-width="3" stroke-linejoin="round">
+    <rect x="18" y="27" width="15" height="27" rx="3" fill="url(#ammoShell)"/>
+    <polygon points="18,27 33,27 25.5,13" fill="#ffd07a"/>
+    <rect x="39" y="27" width="15" height="27" rx="3" fill="url(#ammoShell)"/>
+    <polygon points="39,27 54,27 46.5,13" fill="#ffd07a"/>
+  </g>
+  <!-- 弹药箱 -->
+  <rect x="15" y="47" width="70" height="37" rx="5" fill="url(#ammoCrate)" stroke="#12100a" stroke-width="5" stroke-linejoin="round"/>
+  <rect x="20" y="51" width="60" height="11" rx="3" fill="#6b5a2c" opacity="0.85"/>
+  <rect x="20" y="62" width="60" height="4" fill="#12100a" opacity="0.55"/>
+  <rect x="43" y="47" width="14" height="37" fill="#f0a72c" opacity="0.95" stroke="#6f4a10" stroke-width="3"/>
+  <rect x="39" y="68" width="22" height="14" rx="3" fill="#f0a72c" stroke="#6f4a10" stroke-width="3" stroke-linejoin="round"/>
+  <rect x="21" y="70" width="15" height="13" rx="2" fill="#12100a" opacity="0.5"/>
+</svg>

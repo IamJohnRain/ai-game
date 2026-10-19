@@ -1,0 +1,19 @@
+{
+  "name": "@ai-game/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@ai-game/engine": "workspace:*",
+    "@ai-game/prompt": "workspace:*",
+    "@ai-game/protocol": "workspace:*",
+    "@ai-game/sandbox": "workspace:*",
+    "@ai-game/script-check": "workspace:*",
+    "@ai-game/script-extract": "workspace:*",
+    "@ai-game/orchestrator": "workspace:*",
+    "@ai-game/zippack": "workspace:*"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "@ai-game/script-check",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@ai-game/protocol": "workspace:*",
+    "@ai-game/sandbox": "workspace:*",
+    "@ai-game/script-extract": "workspace:*",
+    "@ai-game/engine": "workspace:*"
+  }
+}

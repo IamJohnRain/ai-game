@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- 出生点：着陆坪/停机坪。冷色双圆环 + 中心六边形 + 中心箭头，叠在格子上也能与邻格区分（四周留 8 空隙）。 -->
+  <defs>
+    <radialGradient id="spawnPlate" cx="0.5" cy="0.42" r="0.62">
+      <stop offset="0" stop-color="#17293d" stop-opacity="0.62"/>
+      <stop offset="1" stop-color="#0a1120" stop-opacity="0.55"/>
+    </radialGradient>
+  </defs>
+  <circle cx="50" cy="50" r="42" fill="url(#spawnPlate)"/>
+  <circle cx="50" cy="50" r="38" fill="none" stroke="#7dd3fc" stroke-width="7"/>
+  <circle cx="50" cy="50" r="27" fill="none" stroke="#38bdf8" stroke-width="4" opacity="0.55"/>
+  <polygon points="50,32 65.6,41 65.6,59 50,68 34.4,59 34.4,41" fill="#7dd3fc" fill-opacity="0.22" stroke="#a5e4ff" stroke-width="5" stroke-linejoin="round"/>
+  <polygon points="50,38 62,54 54,54 54,66 46,66 46,54 38,54" fill="#cfe9ff" fill-opacity="0.95" stroke="#0b1220" stroke-width="3" stroke-linejoin="round"/>
+</svg>

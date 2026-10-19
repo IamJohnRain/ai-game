@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- 水（阻挡移动、不挡视线）：深蓝水面，两暗两亮共四道波纹 + 少量浪花高光，读作液体而非硬块。 -->
+  <defs>
+    <linearGradient id="waterBase" x1="0" y1="0" x2="0.2" y2="1">
+      <stop offset="0" stop-color="#245a8c"/>
+      <stop offset="0.5" stop-color="#1d4b78"/>
+      <stop offset="1" stop-color="#163a5e"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="100" height="100" fill="url(#waterBase)"/>
+  <!-- 波谷（暗） -->
+  <g fill="none" stroke="#123a5e" stroke-width="7" stroke-linejoin="round" opacity="0.5">
+    <path d="M 14 38 Q 32 28 50 38 T 88 38"/>
+    <path d="M 14 68 Q 32 78 50 68 T 88 68"/>
+  </g>
+  <!-- 波峰（亮） -->
+  <g fill="none" stroke="#56a3da" stroke-width="6" stroke-linejoin="round" opacity="0.55">
+    <path d="M 14 29 Q 32 20 50 29 T 88 29"/>
+    <path d="M 14 59 Q 32 50 50 59 T 88 59"/>
+    <path d="M 18 88 Q 34 80 52 88 T 88 88"/>
+  </g>
+  <!-- 浪花高光 -->
+  <g fill="none" stroke="#a9d6f2" stroke-width="5" opacity="0.35">
+    <path d="M 26 45 L 40 45"/>
+    <path d="M 60 75 L 74 75"/>
+  </g>
+</svg>

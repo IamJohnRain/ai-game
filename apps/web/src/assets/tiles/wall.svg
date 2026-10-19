@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- 墙（阻挡移动与视线）：四块混凝土/砖砌块石，顶面受光、底边压暗，靠"块体+缝隙"一眼判读为硬障碍。 -->
+  <defs>
+    <linearGradient id="wallFace" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#313a48"/>
+      <stop offset="0.55" stop-color="#252c37"/>
+      <stop offset="1" stop-color="#1a2028"/>
+    </linearGradient>
+    <linearGradient id="wallFaceB" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b3340"/>
+      <stop offset="1" stop-color="#171c24"/>
+    </linearGradient>
+  </defs>
+  <!-- 缝隙底色（同时也是整格满铺的底）：未与墙相邻的格子边自然形成暗缝 -->
+  <rect x="0" y="0" width="100" height="100" fill="#12161d"/>
+  <g stroke="#0b0e13" stroke-width="4" stroke-linejoin="round">
+    <rect x="7" y="7" width="39" height="38" rx="3" fill="url(#wallFace)"/>
+    <rect x="54" y="7" width="39" height="38" rx="3" fill="url(#wallFaceB)"/>
+    <rect x="7" y="53" width="39" height="40" rx="3" fill="url(#wallFaceB)"/>
+    <rect x="54" y="53" width="39" height="40" rx="3" fill="url(#wallFace)"/>
+  </g>
+  <!-- 每块砖：顶面受光条 + 底边阴影条 -->
+  <g fill="#4d5866" opacity="0.5">
+    <rect x="11" y="11" width="31" height="7" rx="2"/>
+    <rect x="58" y="11" width="31" height="7" rx="2"/>
+    <rect x="11" y="57" width="31" height="7" rx="2"/>
+    <rect x="58" y="57" width="31" height="7" rx="2"/>
+  </g>
+  <g fill="#05070a" opacity="0.5">
+    <rect x="11" y="34" width="31" height="7" rx="2"/>
+    <rect x="58" y="34" width="31" height="7" rx="2"/>
+    <rect x="11" y="82" width="31" height="7" rx="2"/>
+    <rect x="58" y="82" width="31" height="7" rx="2"/>
+  </g>
+  <!-- 混凝土细节：麻点与裂缝 -->
+  <circle cx="22" cy="42" r="5" fill="#0f1319" opacity="0.5"/>
+  <circle cx="74" cy="78" r="5" fill="#0f1319" opacity="0.45"/>
+  <circle cx="86" cy="18" r="5" fill="#0f1319" opacity="0.4"/>
+  <path d="M 62 16 L 74 25 L 70 34" fill="none" stroke="#090c11" stroke-width="4" stroke-linejoin="round" opacity="0.75"/>
+  <path d="M 18 66 L 30 73" fill="none" stroke="#090c11" stroke-width="4" stroke-linejoin="round" opacity="0.7"/>
+</svg>

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- 加油点：青色油桶（受光桶盖 + 桶口）与桶身正面的油滴标记，一眼读作"燃料"。 -->
+  <defs>
+    <linearGradient id="fuelDrum" x1="0" y1="0" x2="1" y2="0.6">
+      <stop offset="0" stop-color="#2aa79b"/>
+      <stop offset="0.45" stop-color="#1d7f78"/>
+      <stop offset="1" stop-color="#125f5a"/>
+    </linearGradient>
+  </defs>
+  <ellipse cx="50" cy="85" rx="34" ry="7" fill="#0b0e14" opacity="0.4"/>
+  <rect x="16" y="24" width="68" height="62" rx="10" fill="url(#fuelDrum)" stroke="#06302e" stroke-width="5" stroke-linejoin="round"/>
+  <ellipse cx="50" cy="24" rx="34" ry="9" fill="#4ad8ca" stroke="#06302e" stroke-width="5"/>
+  <ellipse cx="50" cy="24" rx="15" ry="5" fill="#0b4c48" opacity="0.85"/>
+  <!-- 桶身油滴标记 -->
+  <polygon points="38,62 62,62 50,38" fill="#9df2ea" stroke="#06302e" stroke-width="3" stroke-linejoin="round"/>
+  <circle cx="50" cy="62" r="12" fill="#9df2ea" stroke="#06302e" stroke-width="3"/>
+</svg>

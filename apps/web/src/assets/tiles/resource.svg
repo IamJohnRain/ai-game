@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- 资源点（矿点）：三根紫色晶簇插在矿石堆上，主晶带亮面切面 + 两颗晶光，堆体分左亮右暗两面。 -->
+  <defs>
+    <linearGradient id="resourceCrystal" x1="0" y1="0" x2="1" y2="0.4">
+      <stop offset="0" stop-color="#c4b5fd"/>
+      <stop offset="0.5" stop-color="#8b5cf6"/>
+      <stop offset="1" stop-color="#5b32b8"/>
+    </linearGradient>
+    <linearGradient id="resourceMound" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0" stop-color="#3f3168"/>
+      <stop offset="1" stop-color="#231a42"/>
+    </linearGradient>
+  </defs>
+  <ellipse cx="50" cy="82" rx="36" ry="9" fill="#0b0e14" opacity="0.45"/>
+  <!-- 矿石堆 -->
+  <polygon points="18,86 30,68 44,60 64,62 78,72 84,86" fill="url(#resourceMound)" stroke="#171029" stroke-width="5" stroke-linejoin="round"/>
+  <polygon points="30,68 44,60 52,80 32,84" fill="#59428f" opacity="0.7"/>
+  <polygon points="52,80 44,60 64,62 78,72 80,84" fill="#1c1436" opacity="0.5"/>
+  <!-- 晶簇 -->
+  <g stroke="#2b1a52" stroke-width="4" stroke-linejoin="round">
+    <polygon points="27,40 35,52 33,76 21,76 20,52" fill="url(#resourceCrystal)"/>
+    <polygon points="50,18 60,36 56,70 44,70 40,36" fill="url(#resourceCrystal)"/>
+    <polygon points="73,44 80,56 78,78 67,78 66,56" fill="url(#resourceCrystal)"/>
+  </g>
+  <!-- 亮面切面 -->
+  <g fill="#e6dfff" opacity="0.42">
+    <polygon points="50,18 50,70 44,70 40,36"/>
+    <polygon points="27,40 28,76 21,76 20,52"/>
+    <polygon points="73,44 74,78 67,78 66,56"/>
+  </g>
+  <!-- 晶光 -->
+  <g fill="#ede9fe" opacity="0.85">
+    <polygon points="69,21 73,28 69,35 65,28"/>
+    <polygon points="33,22 37,28 33,34 29,28"/>
+  </g>
+</svg>

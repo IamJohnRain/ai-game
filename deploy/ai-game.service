@@ -1,0 +1,32 @@
+[Unit]
+Description=AI 坦克对战平台（ai-game）：外部 Agent 上传策略脚本 / 1v1 赛事 / 回放与战报
+Documentation=file://__HOME__/ai-game/docs/07-部署.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+Group=__USER__
+WorkingDirectory=__HOME__/ai-game
+Environment=NODE_ENV=production
+# 监听 0.0.0.0 才能从公网访问；只想本机/隧道访问就把 HOST 改成 127.0.0.1（见 docs/07 第 6 节）
+Environment=HOST=0.0.0.0
+Environment=PORT=8787
+Environment=AI_GAME_DATA_DIR=__HOME__/ai-game/data
+# 这台机器还要跑 docker(3000) 与 migpt，给 Node 堆留个上限做个好邻居；沙箱内存不算在这里
+Environment=NODE_OPTIONS=--max-old-space-size=1024
+# 需要覆盖时写 ~/ai-game/.env（KEY=VALUE，不带 export）：PORT / HOST / AI_GAME_TURN_INTERVAL_MS / AI_GAME_MAX_CONCURRENT / AI_GAME_MASTER_KEY
+EnvironmentFile=-__HOME__/ai-game/.env
+ExecStart=__NODE__ --import tsx apps/server/src/index.ts
+Restart=always
+RestartSec=3
+# 日志写文件而不是 journald：由 logrotate（每日 maxsize 20M）与 deploy/log-maintenance.sh（每 15 分钟 + 磁盘水位）负责老化
+StandardOutput=append:__HOME__/ai-game/logs/app.log
+StandardError=append:__HOME__/ai-game/logs/app.log
+LimitNOFILE=65535
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

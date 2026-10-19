@@ -1,0 +1,14 @@
+# 由 deploy/install.sh 安装到 /etc/logrotate.d/ai-game
+# 第一层老化：cron.daily 触发（系统自带 /etc/cron.daily/logrotate），单文件超过 maxsize 也会被切
+# 第二层兜底在 deploy/log-maintenance.sh（每 15 分钟 + 磁盘水位），两层都不依赖应用自身
+__HOME__/ai-game/logs/*.log {
+    su __USER__ __USER__
+    daily
+    maxsize 20M
+    rotate 14
+    compress
+    delaycompress
+    copytruncate
+    missingok
+    notifempty
+}

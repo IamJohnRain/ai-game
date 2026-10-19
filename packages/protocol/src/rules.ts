@@ -1,0 +1,109 @@
+// packages/protocol/src/rules.ts —— 数值权威（与 docs/02-游戏规则-v1.md §7 参数表一一对应）
+import { z } from "zod";
+
+export const HitChanceBandSchema = z.object({
+  maxDistance: z.number().int().positive(),
+  chance: z.number().int().min(0).max(100),
+});
+
+export const RulesetSchema = z.object({
+  version: z.string(),
+  // 回合
+  apPerTurn: z.number().int().positive(),
+  maxRounds: z.number().int().positive(),
+  // 坦克属性
+  hpMax: z.number().int().positive(),
+  ammoMax: z.number().int().positive(),
+  fuelMax: z.number().int().positive(),
+  cargoMax: z.number().int().positive(),
+  initial: z.object({ hp: z.number().int(), ammo: z.number().int(), fuel: z.number().int(), cargo: z.number().int() }),
+  respawn: z.object({ hp: z.number().int(), ammo: z.number().int(), fuel: z.number().int(), cargo: z.number().int() }),
+  respawnRounds: z.number().int().nonnegative(),
+  // 移动与经济
+  moveFuelCost: z.number().int().nonnegative(),
+  /** 燃油耗尽时的应急移动：不消耗燃油，但每格扣这么多分（防止"卡死在半路"的死局） */
+  emergencyMoveCost: z.number().int().nonnegative(),
+  ammoPrice: z.number().int().nonnegative(),
+  fuelPricePer10: z.number().int().nonnegative(),
+  loadAmmoPerAction: z.number().int().positive(),
+  refuelPerAction: z.number().int().positive(),
+  collectPerAction: z.number().int().positive(),
+  depositScorePerUnit: z.number().int().nonnegative(),
+  killReward: z.number().int().nonnegative(),
+  deathPenalty: z.number().int().nonnegative(),
+  // 战斗
+  fireRange: z.number().int().positive(),
+  shellDamage: z.number().int().positive(),
+  forestDamageMult: z.number().min(0).max(1),
+  hitChanceBands: z.array(HitChanceBandSchema).min(1),
+  forestHitPenalty: z.number().int().min(0).max(100),
+  minHitChance: z.number().int().min(0).max(100),
+  // 视野
+  visionRadius: z.number().int().positive(),
+  forestStealthRadius: z.number().int().positive(),
+  lastKnownMemoryRounds: z.number().int().positive(),
+  // 观战
+  turnIntervalMsDefault: z.number().int().positive(),
+});
+export type Ruleset = z.infer<typeof RulesetSchema>;
+
+export const RULESET_VERSION = "1.1";
+
+export const DEFAULT_RULESET: Ruleset = {
+  version: RULESET_VERSION,
+  apPerTurn: 2,
+  maxRounds: 150,
+  hpMax: 100,
+  ammoMax: 20,
+  fuelMax: 100,
+  cargoMax: 5,
+  initial: { hp: 100, ammo: 6, fuel: 40, cargo: 0 },
+  respawn: { hp: 100, ammo: 6, fuel: 40, cargo: 0 },
+  respawnRounds: 3,
+  moveFuelCost: 2,
+  emergencyMoveCost: 2,
+  ammoPrice: 2,
+  fuelPricePer10: 1,
+  loadAmmoPerAction: 6,
+  refuelPerAction: 30,
+  collectPerAction: 3,
+  depositScorePerUnit: 10,
+  killReward: 20,
+  deathPenalty: 20,
+  fireRange: 8,
+  shellDamage: 20,
+  forestDamageMult: 0.5,
+  hitChanceBands: [
+    { maxDistance: 2, chance: 90 },
+    { maxDistance: 4, chance: 70 },
+    { maxDistance: 6, chance: 50 },
+    { maxDistance: 8, chance: 30 },
+  ],
+  forestHitPenalty: 20,
+  minHitChance: 10,
+  visionRadius: 6,
+  forestStealthRadius: 3,
+  lastKnownMemoryRounds: 12,
+  turnIntervalMsDefault: 1200,
+};
+
+/** 不同人数使用的出生点下标（1 基，对应 map.spawns）。3 人局必然存在轻微不对称，见文档说明。 */
+export const SPAWN_SETS: Record<number, number[]> = {
+  2: [1, 3],
+  3: [1, 2, 4],
+  4: [1, 2, 3, 4],
+};
+
+/** 命中率计算（唯一实现，引擎与任务书正文共用） */
+export function hitChance(rules: Ruleset, distance: number, targetInForest: boolean): number {
+  let chance = rules.minHitChance;
+  for (const band of rules.hitChanceBands) {
+    if (distance <= band.maxDistance) { chance = band.chance; break; }
+  }
+  if (targetInForest) chance -= rules.forestHitPenalty;
+  return Math.max(rules.minHitChance, chance);
+}
+
+export function damageOnHit(rules: Ruleset, targetInForest: boolean): number {
+  return targetInForest ? Math.round(rules.shellDamage * rules.forestDamageMult) : rules.shellDamage;
+}
