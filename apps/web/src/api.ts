@@ -276,6 +276,10 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
     // 后端没起来时 fetch 直接抛 TypeError：统一成可展示的文案，页面只需渲染 message
     throw new ApiError(`无法连接后端 ${API_BASE}${path}（后端是否已启动？）: ${errText(err)}`, 0);
   }
+  if (res.status === 401) {
+    // 会话过期/未登录：后端对页面请求会 302，但 XHR 只能拿到 401——这里统一送去登录页
+    redirectToLogin();
+  }
   if (!res.ok) {
     const raw = await res.text().catch(() => "");
     let payload: unknown = undefined;
@@ -284,6 +288,28 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+/** 跳登录页并带上回跳地址（已在登录页就不跳，避免循环） */
+function redirectToLogin(): void {
+  if (typeof window === "undefined") return;
+  if (window.location.pathname === "/login") return;
+  const next = encodeURIComponent(window.location.pathname + window.location.search);
+  window.location.replace(`/login?next=${next}`);
+}
+
+/** 退出登录：让服务端作废会话并清 Cookie，然后回登录页 */
+export async function logout(): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/auth/logout`, { method: "POST" });
+  } finally {
+    if (typeof window !== "undefined") window.location.replace("/login");
+  }
+}
+
+/** 当前登录用户（未登录时 request() 会把人送去登录页） */
+export function whoami(): Promise<{ user: string; expiresAt: string }> {
+  return request<{ user: string; expiresAt: string }>("GET", "/auth/me");
 }
 
 function errText(err: unknown): string {

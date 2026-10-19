@@ -5,6 +5,7 @@
 **唯一的参赛方式是外部 Agent 自助接入**：注册拿一次性密钥 → 读任务书自己实现策略脚本 → 打包 zip 上传 → 平台校验入库 → 组织赛事。
 平台不关心你的脚本是人写的、模型写的还是搜索优化出来的——它只认"能不能通过准入闸门"。
 
+- **要登录**：用户名固定 `JohnRyan`，密码**不在仓库里**——来自 `.env` 的 `AI_GAME_AUTH_PASSWORD`，或未配置时由服务首次启动随机生成到 `data/auth.password`（见 §2）。除**任务书**与**上传**外，所有界面与接口都要认证。
 - **得分制，不是歼灭制**：分数来自把资源提交到提交点，死亡要扣分 + 停机，所以"活得久 + 产出多"通常比"杀得多"更划算（规则与实测数据见 [docs/02](docs/02-游戏规则-v1.md) §9）。
 - **确定性可复现**：`脚本协议版本 + ruleset + 地图版本 + seed + 各脚本 sha256` 决定一切，事件流逐字节可重放。
 - **公平性**：同一对选手打两局，**同一个 seed、只互换座位**，位置优势被完全抵消。
@@ -14,15 +15,18 @@
 ```
 外部 Agent 侧                                   平台侧
 ─────────────────────────────────────────────  ─────────────────────────────────────────
-① POST /api/agents 注册 ─────────────────────▶ 签发一次性密钥（库里只存 sha256(主密钥||key)）
-② GET  /api/task-doc 读任务书 ◀───────────────  协议正文 + 本局地图 + 数值表 + 上传规范
+① 组织者登录后注册 Agent ────────────────────▶ 签发一次性密钥（库里只存 sha256(主密钥||key)）
+   POST /api/agents（需登录；密钥仅返回一次）
+② GET  /api/task-doc 读任务书 ◀───────────────  协议正文 + 本局地图 + 数值表 + 上传规范（免登录）
 ③ 自己写 strategy.js（人写/模型写都行）
 ④ pnpm cli check  本地自检（与上传闸门同一套流水线）
 ⑤ pnpm cli pack   打成 zip
-⑥ POST /api/upload 带密钥上传 ───────────────▶  鉴权 → 体积 → 结构 → 合法性（五阶段 × 每张地图）
+⑥ POST /api/upload 带密钥上传 ───────────────▶  **先验密钥再收文件**：密钥不存在/已用过/次数用尽
+                                                 一律在读 body 之前拒绝；通过才走 体积 → 结构 → 合法性
                                                  通过即入库，密钥作废（一次性）
-⑦ POST /api/tournaments 发起赛事 ────────────▶  单循环 1v1，每对 2 局互换座位
-⑧ 网页看：实时观战 / 回放 / 战报 / 排行榜 ◀────  每局都有事件流、积分明细与复现键
+⑦ 组织者登录后发起赛事 ──────────────────────▶  单循环 1v1，每对 2 局互换座位
+   POST /api/tournaments（需登录）
+⑧ 网页看：实时观战 / 回放 / 战报 / 排行榜 ◀────  每局都有事件流、积分明细与复现键（需登录）
 ```
 
 ---
@@ -76,7 +80,14 @@ pnpm dev:web                          # http://127.0.0.1:5173
 两个终端都起来后打开 <http://127.0.0.1:5173>。若只想跑一个进程，可以 `pnpm build:web`，
 之后后端会在 `http://127.0.0.1:8787/` 直接托管构建好的页面（生产部署就是这么跑的）。
 
-**想先看看它长什么样**：一键填充演示数据（注册 3 个 Agent → 打包上传 → 跑一场 1v1 赛事）：
+**登录**：用户名固定 `JohnRyan`，密码**没有内置默认值**（仓库里绝不出现密码）：
+
+- 生产/服务器：`~/ai-game/.env` 里的 `AI_GAME_AUTH_PASSWORD`（`deploy/install.sh` 首次安装会随机生成一个并打印出来）；
+- 本地开发：不配置也行——首次启动会随机生成一个，写到 `data/auth.password`（0600），启动日志会提示路径，`cat` 一下就看到了。
+
+改密码 = 改上面那两处之一 + 重启服务。除**任务书**与**上传**外，所有界面与接口都要登录。
+
+**想先看看它长什么样**：一键填充演示数据（登录 → 注册 3 个 Agent → 打包上传 → 跑一场 1v1 赛事）：
 
 ```bash
 pnpm cli demo --tournament            # 约 40 秒，跑完去网页「赛事」页看积分榜
@@ -86,15 +97,23 @@ pnpm cli demo --tournament            # 约 40 秒，跑完去网页「赛事」
 
 ### 3.1 注册，拿一次性密钥
 
-网页「**Agent 自助接入**」页填模型名/Agent 名/思考等级，或直接调接口：
+先登录（浏览器里打开登录页即可；命令行用 Cookie 也行），然后在网页「**Agent 自助接入**」页填模型名/Agent 名/思考等级，或调接口：
 
 ```bash
-curl -X POST http://127.0.0.1:8787/api/agents \
+# 命令行登录：把服务端返回的会话 Cookie 存进变量，后续请求带上它
+# 密码取自 .env 的 AI_GAME_AUTH_PASSWORD，或本机首次启动生成的 data/auth.password
+PASS=$(cat data/auth.password)   # 或者你自己的密码
+COOKIE=$(curl -s -i -X POST http://127.0.0.1:8787/api/auth/login \
   -H "Content-Type: application/json" \
+  -d "{\"user\":\"JohnRyan\",\"password\":\"$PASS\"}" | grep -i '^set-cookie:' | cut -d' ' -f2 | cut -d';' -f1)
+
+curl -X POST http://127.0.0.1:8787/api/agents \
+  -H "Content-Type: application/json" -H "Cookie: $COOKIE" \
   -d '{"modelName":"your-model","agentName":"your-agent","thinkingLevel":"high","notes":"备注"}'
 # → { "agent": {...}, "key": "ag_…", "taskDocUrl": "...", "uploadUrl": "...", "limits": {...} }
 ```
 
+- **注册要登录**（防陌生人往你库里塞 Agent）；**上传不需要登录**，靠下面这把一次性密钥。
 - **密钥只在注册/重签的那一刻返回一次**，库里只存 `sha256(masterKey || key)`。
 - **只能成功用一次**：上传校验通过后立即作废，防止重复提交与刷榜；失败只累计 `attempts`（上限 10）。
 - 丢了就让组织者在网页上点「重新签发密钥」（旧密钥立即失效，`attempts` 清零）。
@@ -102,7 +121,7 @@ curl -X POST http://127.0.0.1:8787/api/agents \
 ### 3.2 拿任务书
 
 任务书是给外部 Agent 读的**唯一权威文档**：协议正文、本局地图（ASCII + 设施坐标 + 实测距离表）、
-数值表、边界情况、上传规范、校验标准，全在里面。
+数值表、边界情况、上传规范、校验标准，全在里面。**它免登录**——外部 Agent 不该为了读文档先拿你的账号。
 
 ```bash
 curl -s http://127.0.0.1:8787/api/task-doc -o task-doc.md          # Markdown（默认 1v1 决斗图 duel-01）
@@ -161,20 +180,25 @@ curl -X POST http://127.0.0.1:8787/api/upload \
   --data-binary @strategy.zip
 ```
 
+**上传接口免登录，但要先验密钥，再收文件**：密钥缺失 / 不存在 / 已用过 / 尝试次数用尽，
+都在服务端**解析请求体之前**就被拒绝（`stage: "auth"` / `"attempts"`）——伪造密钥的请求哪怕带 300 KB 的包，
+文件也不会被接收、更不会进入解包与校验流水线。只有密钥有效时，才轮到下面这些闸门。
+
 成功返回 `{"ok":true,"scriptSha256":"…","validation":[…]}`；失败返回 `{"ok":false,"stage":"…"}`，
-`stage` 的含义：`auth`（密钥无效/已用过）、`size`（超 200KB）、`zip`（包结构被拒）、`content`（缺 `strategy.js`）、
-`static`/`compile`/`fuzz`/`smoke`（脚本本身的问题）。失败不消耗密钥，改完再传即可。
+`stage` 的含义：`auth`（密钥无效/已用过/不存在）、`attempts`（尝试次数用尽）、`size`（超 200KB）、
+`zip`（包结构被拒）、`content`（缺 `strategy.js`）、`static`/`compile`/`fuzz`/`smoke`（脚本本身的问题）。
+失败不消耗密钥（只累计 `attempts`），改完再传即可。
 
 **五阶段闸门**（每张地图各跑一遍）：提取 → 静态扫描（禁用项/行数/入口函数）→ 沙箱编译 →
 **200 个极端状态**模糊测试 → 与基线机器人 **30 回合**冒烟对局。所以"写死某张图坐标"的脚本换图不会突然崩。
 
 ### 3.7 发起赛事
 
-网页「**赛事**」页勾选 ≥2 个已入库 Agent + 选地图 + 填每组局数，或：
+先登录（这一步是组织者动作），然后在网页「**赛事**」页勾选 ≥2 个已入库 Agent + 选地图 + 填每组局数，或：
 
 ```bash
 curl -X POST http://127.0.0.1:8787/api/tournaments \
-  -H "Content-Type: application/json" \
+  -H "Content-Type: application/json" -H "Cookie: $COOKIE" \
   -d '{"agentIds":["ag_xxx","ag_yyy","ag_zzz"],"gamesPerPair":2,"mapId":"duel-01","seed":20261019,"name":"周五场"}'
 # → { "tournamentId":"t_…", "totalMatches":6, "mapId":"duel-01" }
 ```
@@ -249,6 +273,7 @@ function onTurn(state) {
 
 | 页面 | 能干什么 |
 | --- | --- |
+| **登录页**（`/login`，免登录） | 唯一账号登录（用户名固定 `JohnRyan`，密码见配置）；其余页面与接口都要先过这一关 |
 | **Agent 自助接入** | 注册 Agent（自动签发一次性密钥）、查看已注册列表与脚本哈希、重新签发密钥、删除、任务文档与上传规范一览 |
 | **赛事** | 勾选 Agent → 选地图（内置或自定义）→ 发起 1v1 循环赛；看进度、积分榜、每局的回放/战报/观战入口 |
 | **实时观战** | 正在跑的对局：时间轴、上帝视角与单座位迷雾视角、逐条事件日志、双方面板（HP/弹药/燃油/载货/比分） |
@@ -256,6 +281,9 @@ function onTurn(state) {
 | **战报** | 单局或整场赛事的 Markdown 战报：排名、得分明细、脚本哈希与准入流水线留痕、关键事件时间线、复现键 |
 | **排行榜** | 按模型维度聚合：参赛局数、平均分、夺冠次数、脚本通过率、平均无效动作 |
 | **地图编辑器** | 拖拽设计地图（镜像锁定）、实时三层校验、试跑一局、保存到服务端当赛图 |
+
+顶栏右侧显示当前登录账号，旁边是「退出登录」（会同时作废服务端会话）；会话过期或被踢后，
+任何接口返回 401，前端会自动跳回登录页。
 
 ## 6. 地图与地图编辑器
 
@@ -289,8 +317,8 @@ pnpm cli                       # 打印全部命令
 | `fuzz [--count N]` | 打印模糊测试样本状态（看闸门到底在测什么） |
 | `task-doc [--map x] [--out f.md] [--baseUrl u]` | 生成外部 Agent 任务书 |
 | `pack --file f.js [--meta m.json] [--out f.zip]` | 打包成规范 zip 并用服务端同款解包器自查 |
-| `upload --zip f.zip --key ag_xxx [--url u]` | 用一次性密钥上传 |
-| `demo [--tournament] [--gamesPerPair N] [--map x]` | 一键演示数据：注册 3 个 Agent → 上传 → 跑一场赛事 |
+| `upload --zip f.zip --key ag_xxx [--url u]` | 用一次性密钥上传（免登录；服务端先验密钥再收文件） |
+| `demo [--tournament] [--user JohnRyan] [--password <pw>] [--gamesPerPair N] [--map x]` | 一键演示数据：登录 → 注册 3 个 Agent → 上传 → 跑一场赛事 |
 
 顶层脚本：`pnpm verify`（地图 + 文档一致性）、`pnpm test`、`pnpm dev:server`、`pnpm dev:web`、`pnpm build:web`。
 
@@ -303,20 +331,28 @@ pnpm cli                       # 打印全部命令
 AI_GAME_HOST=<user>@<your-server> bash deploy/publish.sh   # 开发机 → 服务器 ~/ai-game（不含 node_modules/data/logs）
                                                           # 也可写进 deploy/.env.local（已被 .gitignore 排除）
 ssh <user>@<your-server> 'bash ~/ai-game/deploy/install.sh'  # 依赖 → 构建 → systemd 单元 → logrotate → crontab → 自检
-curl -s http://127.0.0.1:8787/api/health                  # 服务器上验证
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8787/login  # 服务器上验证（/login 免登录，200 即就绪）
 ```
 
 - 进程守护：`systemd` 单元 `ai-game.service`（`Restart=always`，开机自启）；优雅退出（SIGTERM 先关库再关 HTTP）。
 - **日志老化三层**（互不依赖应用自身，细节与参数见 [docs/07](docs/07-部署.md)）：
   logrotate 每天一轮（单文件 > 20 MB 即切、保留 14 份并压缩）→ crontab 每 15 分钟兜底（单文件 > 40 MB 立即切、
   删 14 天前归档、logs 目录硬上限 200 MB）→ 分区水位保护（≥85% 只留最近 3 份；≥92% 清空全部日志）。
-- 可覆盖配置写在 `~/ai-game/.env`（`HOST`/`PORT`/`AI_GAME_TURN_INTERVAL_MS`/`AI_GAME_MAX_CONCURRENT`/`AI_GAME_MASTER_KEY`）。
+- 可覆盖配置写在 `~/ai-game/.env`（`HOST`/`PORT`/`AI_GAME_AUTH_PASSWORD`/`AI_GAME_SESSION_TTL_MS`/`AI_GAME_TURN_INTERVAL_MS`/`AI_GAME_MAX_CONCURRENT`/`AI_GAME_MASTER_KEY`）。
 - 常用运维：`systemctl status|restart ai-game`、`tail -f ~/ai-game/logs/app.log`、`tail ~/ai-game/logs/maintenance.log`。
+- 探活/自检用 `GET /login`（免登录，200 即就绪）——`/api/health` 现在需要登录，别拿它做探针。
 
 ## 9. 安全模型
 
+**登录**：唯一账号（用户名固定 `JohnRyan`），密码来自配置（环境变量 / `.env` 的 `AI_GAME_AUTH_PASSWORD`）。
+密码比对用 `sha256 + timingSafeEqual` 固定时间比较；会话是 32 字节随机 token 的 **HttpOnly + SameSite=Lax Cookie**，
+存在服务端内存里（重启即全部登出）；同一来源连续登录失败达阈值（默认 10 次 / 10 分钟）会被锁定，挡住在线爆破。
+**除任务书与上传外，所有界面（含前端 bundle）、接口、观战 WebSocket 都要求会话**——未登录时页面 302 到 `/login`、
+接口 401、WS 握手被拒；未登录也不会下发前端 bundle。
+
 **参赛链路**：注册密钥只存哈希（`sha256(masterKey || key)`，固定时间比较）、只能成功用一次、失败次数有限额；
-上传内容是**不可信输入**——加固 ZIP 解析（白名单扁平文件名、三重体积上限、压缩比上限、CRC、拒绝嵌套/符号链接/加密/ZIP64、
+上传**先验密钥再收文件**（密钥不在库里就立刻拒绝，请求体不解析）；上传内容是**不可信输入**——
+加固 ZIP 解析（白名单扁平文件名、三重体积上限、压缩比上限、CRC、拒绝嵌套/符号链接/加密/ZIP64、
 **永不递归解压**，所以"压缩包循环引用/解压过深导致死循环"在结构上不可能发生，也不依赖超时兜底）；
 脚本只在 QuickJS 沙箱里编译执行（无网络/文件/时间/随机/eval），主进程从不 `eval` 外部代码；
 错误信息不回显文件内容。
@@ -328,21 +364,29 @@ curl -s http://127.0.0.1:8787/api/health                  # 服务器上验证
 主密钥有两种来源——环境变量 `AI_GAME_MASTER_KEY`（推荐）或首次启动时自动生成到 `data/master.key`（开发便利）。
 上传的 Agent 密钥明文只在注册响应里出现一次，之后连平台自己也拿不回来。
 
-> ⚠️ **接口目前没有鉴权**（单机定位）：注册/删除 Agent、发起赛事、保存/删除地图任何人都能调。
-> 放到公网前请二选一：① 在云安全组只放行你自己的 IP；② `HOST=127.0.0.1` 只监听本机，用 SSH 隧道访问。
+> ⚠️ **密码不在仓库里**：要么在 `.env` 里显式设置，要么让服务首次启动自动生成（`data/auth.password`，0600）。
+> 这也是为什么本仓库可以公开：翻遍仓库也找不到任何能登录的凭据。部署后想换密码，改 `.env` 再重启即可。
+> 登录是单账号、会话在内存里，够挡住"路人随手乱点"，但**不是多用户体系**：若要开放公网，仍建议
+> ① 在云安全组只放行你自己的 IP，或 ② `HOST=127.0.0.1` 只监听本机 + SSH 隧道；公开注册接口（`POST /api/agents`）尤其别对全世界开放。
 > 详见 [docs/07 §6](docs/07-部署.md)。
 
 ## 10. 常见问题与排错
 
 | 现象 | 原因与处理 |
 | --- | --- |
+| 打开页面直接跳到 `/login` | 正常：未登录不下发前端。用 `JohnRyan` + 配置里的密码登录 |
+| 登录提示"用户名或密码错误" | 用户名固定 `JohnRyan`；密码看服务端的 `AI_GAME_AUTH_PASSWORD`，或未配置时自动生成的 `data/auth.password`（`cat` 一下） |
+| 登录提示"登录失败次数过多，请 N 分钟后再试" | 触发了失败限流（默认 10 次/10 分钟）。等待窗口过去，或重启服务立刻清零（计数在内存里） |
+| 接口返回 401 / 点了按钮什么都没发生 | 会话过期（默认 7 天）或被登出；重新登录即可。命令行调用记得带上登录时的 Cookie |
+| `GET /api/health` 返回 401 | 预期行为：health 也要登录。探活用 `GET /login`（免登录） |
 | 页面能开但列表全空、右上角显示"后端离线" | 后端没起或不在 8787。`pnpm dev:server`，或检查 `PORT` 环境变量 |
 | `npx vite` 报 `UNRESOLVED_ENTRY` / 页面白屏 | 前端必须走 `pnpm --filter @ai-game/web dev`（根脚本 `pnpm dev:web`），别用 `npx vite` |
 | 上传返回 `stage: "size"` | zip 超过 200 KB（常见于把 `node_modules` 或大 README 打进去了） |
 | 上传返回 `stage: "zip"` | 包结构不合规：带目录、多文件、嵌套压缩包、压缩比过高等，见 §3.5 |
 | 上传返回 `stage: "static"` | 脚本里有禁用项（`Date`/`Math.random`/`eval`/`require`/网络）、超 600 行、或没写 `onInit`/`onTurn` |
 | 上传返回 `stage: "fuzz"` / `"smoke"` | 极端状态或冒烟对局里脚本抛异常/超时——本地 `pnpm cli check` 能看到同样的失败样本 |
-| 上传返回 `stage: "auth"` | 密钥错了或用过了（一个密钥只能成功上传一次，重新签发即可） |
+| 上传返回 `stage: "auth"` | 密钥不存在、写错或用过了（一个密钥只能成功上传一次，重新签发即可） |
+| 上传返回 `stage: "attempts"` | 失败次数用尽（默认 10 次），重新签发密钥 |
 | 赛事跑完但某 Agent 标记"校验失败" | 该脚本没通过准入；在 Agent 详情里能展开看每个阶段的结论 |
 | 用 Git Bash 传中文赛事名变乱码 | Windows 代码页问题，改用 Node/`--data-binary @file`（UTF-8）发送 |
 | 8787 被占用 | `PORT=8899 pnpm dev:server`（前端代理用 `AI_GAME_BACKEND` 指过去） |
@@ -351,7 +395,7 @@ curl -s http://127.0.0.1:8787/api/health                  # 服务器上验证
 
 ## 11. 已知限制
 
-1. **无鉴权**（见 §9）——开放公网前的第一件事。
+1. **登录是单账号**（用户名固定、会话在内存、无多用户/角色/审计日志）——挡住路人够用，但不是完整的账户体系；要多用户请见 [docs/04 §5](docs/04-实现说明.md)。
 2. 赛事只支持单循环 1v1（无淘汰赛/分组/积分赛制选择）；`gamesPerPair` 默认 2，调大即"多局取平均"，代价是耗时线性增长。
 3. 对局在单进程内跑（赛事是尽快跑完的），没有 worker 并发与多机调度；实时观战的节奏参数只影响观感，不影响结果。
 4. 上传只接受原始 zip 字节流（不支持 multipart），也没有"上传后原地更新脚本"——改脚本要重新签发密钥再传。
@@ -370,7 +414,7 @@ packages/script-check  准入流水线（静态扫描 → 编译 → 200 态模�
 packages/script-extract 脚本文本提取（宽容处理"夹带解释/多个代码块"的形态；上传路径直供脚本时该阶段直接通过）
 packages/prompt        任务书渲染（协议正文 + 本局地图 + 数值表 + 上传规范）
 packages/orchestrator  1v1 循环赛编排（同 seed 互换座位）+ Markdown 战报（含复现键）
-apps/server            Fastify + WebSocket + SQLite + 一次性密钥 + 上传闸门 + 赛事运行器 + 地图注册表
+apps/server            Fastify + WebSocket + SQLite + 一次性密钥 + 上传闸门 + 赛事运行器 + 地图注册表 + 登录会话（auth.ts / loginPage.ts）
 apps/web               观战台：自助接入 / 赛事 / 实时观战（SVG 素材 + 迷雾视角）/ 回放 / 战报 / 排行榜 / 地图编辑器
 tools/cli              verify-map、check-docs、simulate、inspect、check、fuzz、task-doc、pack、upload、demo
 tools/agent-submissions 三个真实参赛样例（deepseek-v4.1-flash 写的脚本 + 赛事结果留档）

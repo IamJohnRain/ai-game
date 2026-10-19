@@ -14,8 +14,11 @@ import { createZip, DEFAULT_UPLOAD_LIMITS, readZip, type ZipRejectReason } from 
 import type { ServerConfig } from "./config.ts";
 import { bearerFrom, generateAgentKey, hashAgentKey, maskAgentKey } from "./agentKeys.ts";
 import type { MapRegistry } from "./maps.ts";
-import type { Store } from "./store.ts";
+import type { Store, AgentRow } from "./store.ts";
 import { TournamentRunner } from "./tournaments.ts";
+
+/** onRequest 里验过密钥后，把 agent 挂到请求上给处理器复用（不再查一次库） */
+type UploadRequest = FastifyRequest & { uploadAgent?: AgentRow };
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, "..", "..", "..");
@@ -161,18 +164,36 @@ export function registerExternalRoutes(app: FastifyInstance, deps: ExternalRoute
   });
 
   // ---------------- 脚本上传 ----------------
-  app.post("/api/upload", async (req, reply) => {
-    // 1) 鉴权：一次性密钥
+  // 鉴权放在 onRequest：**先验一次性密钥、再收文件**。密钥缺失 / 不存在 / 已用过 / 次数用尽，
+  // 都在 Fastify 解析 body 之前就拒绝（onRequest 早于 body 解析），所以伪造密钥的请求即使带
+  // 300KB 的包也不会被接收，更不会进入解包与五阶段校验。校验通过才把 agent 挂到请求上给处理器用。
+  const uploadKeyGuard = async (req: FastifyRequest, reply: FastifyReply) => {
     const key = bearerFrom(req.headers.authorization);
-    if (!key) return uploadFail(reply, 401, "auth", "缺少 Authorization: Bearer <一次性密钥>");
+    if (!key) {
+      uploadFail(reply, 401, "auth", "缺少 Authorization: Bearer <一次性密钥>");
+      return reply;
+    }
     const agent = store.findAgentByKeyHash(hashAgentKey(key, config.masterKey));
-    if (!agent) return uploadFail(reply, 401, "auth", "密钥无效");
+    if (!agent) {
+      uploadFail(reply, 401, "auth", "密钥无效：该一次性密钥不存在（先去 POST /api/agents 注册）");
+      return reply;
+    }
     if (agent.status === "uploaded") {
-      return uploadFail(reply, 409, "auth", "该密钥已成功使用过（一次性）；如需重新提交请让组织者重新签发密钥");
+      uploadFail(reply, 409, "auth", "该密钥已成功使用过（一次性）；如需重新提交请让组织者重新签发密钥");
+      return reply;
     }
     if (agent.attempts >= agent.maxAttempts) {
-      return uploadFail(reply, 429, "attempts", `尝试次数已用尽（${agent.attempts}/${agent.maxAttempts}）`);
+      uploadFail(reply, 429, "attempts", `尝试次数已用尽（${agent.attempts}/${agent.maxAttempts}）`);
+      return reply;
     }
+    (req as UploadRequest).uploadAgent = agent;
+    return undefined;
+  };
+
+  app.post("/api/upload", { onRequest: uploadKeyGuard }, async (req, reply) => {
+    // 1) 鉴权已在 onRequest 完成：能走到这里说明密钥有效且未使用（body 也已经按闸门收下）
+    const agent = (req as UploadRequest).uploadAgent;
+    if (!agent) return uploadFail(reply, 500, "auth", "内部错误：上传鉴权钩子未生效");
 
     // 2) 体积：zip 包 ≤ 200KB
     const body = req.body;

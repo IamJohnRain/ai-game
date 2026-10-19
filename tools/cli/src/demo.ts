@@ -12,6 +12,9 @@ const BASELINE_PATH = join(repoRoot, "docs", "examples", "baseline-strategy.js")
 
 export interface DemoOptions {
   baseUrl: string;
+  /** 登录用户名与密码：注册 Agent、发起赛事这些接口都要会话（用户名固定，密码见服务端配置） */
+  user: string;
+  password: string;
   /** 是否同时发起一场赛事 */
   tournament: boolean;
   gamesPerPair: number;
@@ -59,11 +62,28 @@ export async function runDemo(opts: DemoOptions): Promise<{ agentIds: string[]; 
   const agents = demoAgents();
   const ids: string[] = [];
 
+  // 0) 登录拿会话 Cookie：注册与赛事接口都需要登录（上传走一次性密钥，是免登录的）
+  const loginRes = await fetch(`${base}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ user: opts.user, password: opts.password }),
+  });
+  if (!loginRes.ok) {
+    const detail = (await loginRes.json().catch(() => ({}))) as { error?: string };
+    throw new Error(
+      `登录失败（HTTP ${loginRes.status}）：${detail.error ?? ""}　—— 用户名固定为 JohnRyan，密码来自服务端配置` +
+        `（AI_GAME_AUTH_PASSWORD，或未配置时自动生成的 data/auth.password）`,
+    );
+  }
+  const cookie = (loginRes.headers.getSetCookie?.()?.[0] ?? loginRes.headers.get("set-cookie") ?? "").split(";")[0]!;
+  const authed = (extra: Record<string, string> = {}): Record<string, string> => ({ cookie, ...extra });
+  opts.log(`⓪ 已登录 ${opts.user}（会话 Cookie ${cookie.slice(0, 20)}…）`);
+
   for (const a of agents) {
     // 1) 注册（拿一次性密钥）
     const regRes = await fetch(`${base}/api/agents`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authed({ "Content-Type": "application/json" }),
       body: JSON.stringify({ modelName: a.modelName, agentName: a.agentName, thinkingLevel: a.thinkingLevel, notes: a.notes }),
     });
     if (!regRes.ok) throw new Error(`注册失败（HTTP ${regRes.status}）：${(await regRes.text()).slice(0, 200)}`);
@@ -93,7 +113,7 @@ export async function runDemo(opts: DemoOptions): Promise<{ agentIds: string[]; 
   // 3) 发起 1v1 循环赛
   const tRes = await fetch(`${base}/api/tournaments`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authed({ "Content-Type": "application/json" }),
     body: JSON.stringify({ agentIds: ids, gamesPerPair: opts.gamesPerPair, name: "演示赛（自动生成）", maxRounds: opts.maxRounds, ...(opts.mapId ? { mapId: opts.mapId } : {}) }),
   });
   if (!tRes.ok) throw new Error(`创建赛事失败（HTTP ${tRes.status}）：${(await tRes.text()).slice(0, 200)}`);
@@ -104,7 +124,7 @@ export async function runDemo(opts: DemoOptions): Promise<{ agentIds: string[]; 
   const started = Date.now();
   let last = "";
   for (;;) {
-    const detail = (await (await fetch(`${base}/api/tournaments/${created.tournamentId}`)).json()) as {
+    const detail = (await (await fetch(`${base}/api/tournaments/${created.tournamentId}`, { headers: authed() })).json()) as {
       tournament: { status: string; finishedMatches: number; matchCount: number; error?: string };
       standings: { rank: number; agentName: string; modelName: string; played: number; wins: number; draws: number; losses: number; points: number; scoreDiff: number; totalScore: number; totalUnitsDeposited: number }[];
     };

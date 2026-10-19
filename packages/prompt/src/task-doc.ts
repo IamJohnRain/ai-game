@@ -54,7 +54,14 @@ export interface RenderedTaskDoc {
   protocolVersion: string;
   markdown: string;
   limits: UploadLimitsPublic;
-  endpoints: { register: string; upload: string; taskDoc: string; tournaments: string };
+  endpoints: {
+    register: string;
+    upload: string;
+    taskDoc: string;
+    tournaments: string;
+    /** 哪些端点要登录：外部 Agent 只需要免登录的 taskDoc 与 upload */
+    requiresLogin: { register: boolean; upload: boolean; taskDoc: boolean; tournaments: boolean };
+  };
 }
 
 /** 渲染占位符：未提供的占位符原样保留，最后统一检查是否残留 */
@@ -97,6 +104,8 @@ export function renderTaskDoc(opts: TaskDocOptions): RenderedTaskDoc {
     upload: `${base}/api/upload`,
     taskDoc: `${base}/api/task-doc`,
     tournaments: `${base}/api/tournaments`,
+    // 除任务书与上传外，界面与接口都要登录（单账号）；外部 Agent 用不到带会话的那几个
+    requiresLogin: { register: true, upload: false, taskDoc: false, tournaments: true },
   };
 
   const map = opts.map;

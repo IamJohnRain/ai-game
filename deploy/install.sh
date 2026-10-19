@@ -45,6 +45,7 @@ pnpm build:web
 [ -f apps/web/dist/index.html ] || die "前端构建失败：apps/web/dist/index.html 不存在"
 
 # 4) 可选覆盖配置（首次安装生成，之后不动）
+#    登录密码**不在仓库里**：安装时随机生成一个写进 .env，之后想改就编辑该文件再重启
 if [ ! -f "$APP_DIR/.env" ]; then
   log "生成 $APP_DIR/.env（默认值都写在 systemd 单元里，这里只放可覆盖项）"
   cat > "$APP_DIR/.env" <<'ENVEOF'
@@ -55,7 +56,20 @@ if [ ! -f "$APP_DIR/.env" ]; then
 # AI_GAME_MAX_CONCURRENT=2
 # 固定主密钥（64 位 hex）可避免重装后旧密钥失效；留空则用 data/master.key
 # AI_GAME_MASTER_KEY=
+# 登录密码（用户名固定 JohnRyan）——install.sh 已随机生成，编辑这里即可改成自己的
+AI_GAME_AUTH_PASSWORD=__GENERATED_PASSWORD__
+# 会话有效期与登录失败限流（毫秒/次数，默认 7 天、10 次/10 分钟）
+# AI_GAME_SESSION_TTL_MS=604800000
+# AI_GAME_AUTH_MAX_FAILURES=10
+# 走 HTTPS 时打开（Cookie 加 Secure）
+# AI_GAME_COOKIE_SECURE=1
 ENVEOF
+  AUTH_PASS="$("$NODE_BIN" -e 'console.log(require("node:crypto").randomBytes(18).toString("base64url"))')"
+  # 生成的是 base64url（A-Za-z0-9-_），放进 sed 替换里没有转义问题
+  sed -i "s|__GENERATED_PASSWORD__|$AUTH_PASS|" "$APP_DIR/.env"
+  chmod 600 "$APP_DIR/.env"
+  log "登录密码（用户名 JohnRyan）：$AUTH_PASS"
+  echo "     已写入 $APP_DIR/.env，可随时编辑该文件更换（改完 systemctl restart ai-game）"
 fi
 
 # 5) systemd 单元 + logrotate 规则
@@ -83,14 +97,18 @@ log "启用并启动 $SERVICE"
 sudo systemctl enable "$SERVICE" >/dev/null 2>&1 || true
 sudo systemctl restart "$SERVICE"
 
-# 8) 自检：等健康检查通过
+# 8) 自检：/login 是免登录页面，能返回 200 就说明进程、路由与静态托管都就绪
+#    （/api/health 现在需要登录，不能拿它探活；外部探活一律用 /login）
 for _ in $(seq 1 40); do
-  if curl -fsS "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then break; fi
+  if [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/login")" = "200" ]; then break; fi
   sleep 1
 done
-log "健康检查"
-curl -fsS "http://127.0.0.1:$PORT/api/health" || die "服务没能启动，看日志：tail -n 50 $APP_DIR/logs/app.log"
-echo
+log "就绪探测"
+CODE="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/login")"
+[ "$CODE" = "200" ] || die "服务没能启动（GET /login → HTTP $CODE），看日志：tail -n 50 $APP_DIR/logs/app.log"
+echo "GET /login → 200 ✅"
+curl -s -o /dev/null -w 'GET /api/agents（未登录）→ HTTP %{http_code}（应为 401）\n' "http://127.0.0.1:$PORT/api/agents"
+curl -s -o /dev/null -w 'GET /api/task-doc（免登录）→ HTTP %{http_code}（应为 200）\n' "http://127.0.0.1:$PORT/api/task-doc"
 log "运行状态"
 sudo systemctl --no-pager --lines=0 status "$SERVICE" | head -12
 echo

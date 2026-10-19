@@ -2,6 +2,13 @@
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
+import {
+  AUTH_USER,
+  DEFAULT_FAILURE_WINDOW_MS,
+  DEFAULT_MAX_FAILURES,
+  DEFAULT_SESSION_TTL_MS,
+  type AuthConfig,
+} from "./auth.ts";
 
 export interface ServerConfig {
   port: number;
@@ -13,6 +20,8 @@ export interface ServerConfig {
   defaultTurnIntervalMs: number;
   /** 单用户并发比赛数上限 */
   maxConcurrentMatches: number;
+  /** 登录与会话：用户名固定，密码来自 AI_GAME_AUTH_PASSWORD（默认见 auth.ts） */
+  auth: AuthConfig;
   /** 日志配置（测试时可关闭） */
   logger?: boolean | { level: string };
 }
@@ -47,5 +56,15 @@ export function loadConfig(): ServerConfig {
     masterKey,
     defaultTurnIntervalMs: Number(process.env.AI_GAME_TURN_INTERVAL_MS ?? 1200),
     maxConcurrentMatches: Number(process.env.AI_GAME_MAX_CONCURRENT ?? 4),
+    auth: {
+      // 用户名固定（需求如此）；密码**没有内置默认值**：
+      // 优先 AI_GAME_AUTH_PASSWORD（.env），留空则由进程入口自动生成 data/auth.password（见 auth.ts）
+      user: AUTH_USER,
+      password: process.env.AI_GAME_AUTH_PASSWORD ?? "",
+      sessionTtlMs: Number(process.env.AI_GAME_SESSION_TTL_MS ?? DEFAULT_SESSION_TTL_MS),
+      maxFailures: Number(process.env.AI_GAME_AUTH_MAX_FAILURES ?? DEFAULT_MAX_FAILURES),
+      windowMs: Number(process.env.AI_GAME_AUTH_WINDOW_MS ?? DEFAULT_FAILURE_WINDOW_MS),
+      cookieSecure: process.env.AI_GAME_COOKIE_SECURE === "1",
+    },
   };
 }

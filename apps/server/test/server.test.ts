@@ -23,22 +23,43 @@ const dirs: string[] = [];
 async function boot() {
   const dir = mkdtempSync(join(tmpdir(), "ai-game-test-"));
   dirs.push(dir);
+  const base = loadConfig();
   const config: ServerConfig = {
-    ...loadConfig(),
+    ...base,
     port: 0,
     dataDir: dir,
     dbPath: join(dir, "test.db"),
     masterKey: randomBytes(32),
     defaultTurnIntervalMs: 20,
     logger: false,
+    // 仓库里没有默认密码：测试显式给一个
+    auth: { ...base.auth, password: "test-password" },
   };
   const store = new Store(config.dbPath, config.masterKey);
   const registry = new MapRegistry(join(dir, "maps"));
   const tournamentRunners = new Map<string, TournamentRunner>();
   const { app } = await createApp({ config, store, registry, tournamentRunners });
   await app.ready();
+  // 平台现在要登录才能用：先登录一次拿会话 Cookie，之后用 ctx.req 代替 ctx.app.inject。
+  // 未登录时的行为（页面 302 / 接口 401 / 上传仍免登录但先验密钥）由 auth.test.ts 单独覆盖。
+  const login = await app.inject({
+    method: "POST", url: "/api/auth/login",
+    payload: { user: config.auth.user, password: config.auth.password },
+  });
+  const rawCookie = login.headers["set-cookie"];
+  const cookie = (Array.isArray(rawCookie) ? rawCookie[0]! : (rawCookie ?? "")).split(";")[0]!;
+  /** 只需覆盖测试里实际用到的字段，省得依赖 light-my-request 的类型推导 */
+  type ReqOptions = {
+    method: string;
+    url: string;
+    payload?: object | string | Buffer;
+    headers?: Record<string, string>;
+    query?: Record<string, string | string[]>;
+  };
   return {
-    app, store, registry, config, tournamentRunners,
+    app, store, registry, config, tournamentRunners, cookie,
+    /** 已登录的 inject：自动带上会话 Cookie */
+    req: (opts: ReqOptions) => app.inject({ ...opts, headers: { cookie, ...(opts.headers ?? {}) } }),
     close: async () => {
       await app.close();
       store.close();
@@ -78,7 +99,7 @@ async function waitTournament(ctx: Ctx, id: string, timeoutMs = 90_000) {
 test("健康检查、地图、规则接口", async () => {
   const ctx = await boot();
   try {
-    const health = (await ctx.app.inject({ method: "GET", url: "/api/health" })).json();
+    const health = (await ctx.req({ method: "GET", url: "/api/health" })).json();
     assert.equal(health.ok, true);
     assert.ok(health.maps.includes("arena-01"));
     assert.ok(health.maps.includes("duel-01"));
@@ -89,7 +110,7 @@ test("健康检查、地图、规则接口", async () => {
     // 模型接入相关的字段不该再出现在健康检查里
     assert.equal(health.presets, undefined);
 
-    const maps = (await ctx.app.inject({ method: "GET", url: "/api/maps" })).json();
+    const maps = (await ctx.req({ method: "GET", url: "/api/maps" })).json();
     assert.equal(maps.length, 2);
     const arena = maps.find((m: { mapId: string }) => m.mapId === "arena-01");
     assert.equal(arena.version, 2, "地图已升到 @2（中心加油点）");
@@ -97,13 +118,13 @@ test("健康检查、地图、规则接口", async () => {
     assert.equal(arena.errorCount, 0);
     assert.ok(arena.warningCount >= 0);
 
-    const map = (await ctx.app.inject({ method: "GET", url: "/api/maps/arena-01" })).json();
+    const map = (await ctx.req({ method: "GET", url: "/api/maps/arena-01" })).json();
     assert.ok(map.ascii.split("\n").length === 24);
     assert.equal(map.map.fuelStations.length, 12);
     assert.equal(map.audit.errors.length, 0, JSON.stringify(map.audit.errors));
     assert.ok(map.audit.distances.spawn_to_deposit > 0, "审计应给出实测距离参考");
 
-    const rules = (await ctx.app.inject({ method: "GET", url: "/api/rulesets/latest" })).json();
+    const rules = (await ctx.req({ method: "GET", url: "/api/rulesets/latest" })).json();
     assert.equal(rules.shellDamage, 20);
     assert.equal(rules.deathPenalty, 20);
   } finally { await ctx.close(); }
@@ -123,38 +144,38 @@ test("地图编辑器接口：草稿校验 → 保存 → 注册表可见 → �
     };
 
     // 1) 校验（不落盘）
-    const validated = (await ctx.app.inject({ method: "POST", url: "/api/maps/validate", payload: draft })).json();
+    const validated = (await ctx.req({ method: "POST", url: "/api/maps/validate", payload: draft })).json();
     assert.equal(validated.ok, true, JSON.stringify(validated.audit?.errors));
     assert.equal(validated.audit.stats.width, duel.width);
 
     // 2) 内置地图 id 不许占用
-    const clash = await ctx.app.inject({ method: "POST", url: "/api/maps", payload: { ...draft, mapId: "duel-01" } });
+    const clash = await ctx.req({ method: "POST", url: "/api/maps", payload: { ...draft, mapId: "duel-01" } });
     assert.equal(clash.statusCode, 400);
     assert.match(clash.json().error, /内置地图/);
 
     // 3) 非法 id
-    const badId = await ctx.app.inject({ method: "POST", url: "/api/maps", payload: { ...draft, mapId: "Bad_ID" } });
+    const badId = await ctx.req({ method: "POST", url: "/api/maps", payload: { ...draft, mapId: "Bad_ID" } });
     assert.equal(badId.statusCode, 400);
 
     // 4) 破坏对称（只在左上角凿一格墙）→ 校验必须报出来
     const rows = [...draft.grid];
     rows[1] = "." + rows[1]!.slice(1);
-    const asymmetric = (await ctx.app.inject({ method: "POST", url: "/api/maps/validate", payload: { ...draft, grid: rows } })).json();
+    const asymmetric = (await ctx.req({ method: "POST", url: "/api/maps/validate", payload: { ...draft, grid: rows } })).json();
     assert.equal(asymmetric.ok, false);
     assert.ok(asymmetric.audit.errors.some((e: string) => e.includes("镜像")), JSON.stringify(asymmetric.audit.errors));
 
     // 5) 保存：服务端会重算距离参考
-    const saved = (await ctx.app.inject({ method: "POST", url: "/api/maps", payload: draft })).json();
+    const saved = (await ctx.req({ method: "POST", url: "/api/maps", payload: draft })).json();
     assert.equal(saved.ok, true, JSON.stringify(saved.audit?.errors));
     assert.equal(saved.mapId, "custom-test");
     assert.ok(saved.audit.distances.spawn_to_deposit > 0);
 
-    const list = (await ctx.app.inject({ method: "GET", url: "/api/maps" })).json();
+    const list = (await ctx.req({ method: "GET", url: "/api/maps" })).json();
     assert.equal(list.length, 3);
     assert.equal(list.find((m: { mapId: string }) => m.mapId === "custom-test").custom, true);
 
     // 6) 落盘了、能再次读出来，并且距离参考是按实测写进文件的
-    const again = (await ctx.app.inject({ method: "GET", url: "/api/maps/custom-test" })).json();
+    const again = (await ctx.req({ method: "GET", url: "/api/maps/custom-test" })).json();
     assert.equal(again.custom, true);
     assert.ok(again.map.distanceReference_P1.spawn_to_deposit > 0);
     const onDisk = JSON.parse(readFileSync(join(ctx.config.dataDir, "maps", "custom-test.json"), "utf8"));
@@ -166,11 +187,11 @@ test("地图编辑器接口：草稿校验 → 保存 → 注册表可见 → �
     assert.ok(reloaded.get("custom-test"), "重启后自定义地图应仍在注册表里");
 
     // 8) 删除：内置的删不掉，自定义的可以
-    const delBuiltin = await ctx.app.inject({ method: "DELETE", url: "/api/maps/duel-01" });
+    const delBuiltin = await ctx.req({ method: "DELETE", url: "/api/maps/duel-01" });
     assert.equal(delBuiltin.statusCode, 400);
-    const del = await ctx.app.inject({ method: "DELETE", url: "/api/maps/custom-test" });
+    const del = await ctx.req({ method: "DELETE", url: "/api/maps/custom-test" });
     assert.equal(del.statusCode, 200);
-    assert.equal((await ctx.app.inject({ method: "GET", url: "/api/maps" })).json().length, 2);
+    assert.equal((await ctx.req({ method: "GET", url: "/api/maps" })).json().length, 2);
   } finally { await ctx.close(); }
 });
 
@@ -201,7 +222,7 @@ test("地图编辑器：坏图必须被拦住（不可达设施 / 缺设施 / �
         set(duel.width - 1 - x, duel.height - 1 - y);
       }
     }
-    const res = (await ctx.app.inject({
+    const res = (await ctx.req({
       method: "POST", url: "/api/maps/validate",
       payload: { ...duel, mapId: "walled", grid },
     })).json();
@@ -209,7 +230,7 @@ test("地图编辑器：坏图必须被拦住（不可达设施 / 缺设施 / �
     assert.ok(res.audit.errors.length > 0);
 
     // 去掉所有弹药补给点：审计必须报"缺设施"
-    const noAmmo = (await ctx.app.inject({
+    const noAmmo = (await ctx.req({
       method: "POST", url: "/api/maps/validate",
       payload: {
         ...duel,
@@ -222,7 +243,7 @@ test("地图编辑器：坏图必须被拦住（不可达设施 / 缺设施 / �
     assert.ok(noAmmo.audit.errors.some((e: string) => e.includes("弹药")), JSON.stringify(noAmmo.audit.errors));
 
     // spawnsFor1v1 指向不存在的出生点
-    const badPair = (await ctx.app.inject({
+    const badPair = (await ctx.req({
       method: "POST", url: "/api/maps/validate",
       payload: { ...duel, mapId: "bad-pair", spawnsFor1v1: [1, 9] },
     })).json();
@@ -230,14 +251,14 @@ test("地图编辑器：坏图必须被拦住（不可达设施 / 缺设施 / �
     assert.ok(badPair.audit.errors.some((e: string) => e.includes("spawnsFor1v1")));
 
     // 尺寸越界
-    const huge = (await ctx.app.inject({
+    const huge = (await ctx.req({
       method: "POST", url: "/api/maps/validate",
       payload: { ...duel, mapId: "huge", width: 80, height: 80 },
     })).json();
     assert.equal(huge.ok, false);
 
     // 落盘也要拦住：坏图不进注册表
-    const saveBad = await ctx.app.inject({
+    const saveBad = await ctx.req({
       method: "POST", url: "/api/maps",
       payload: { ...duel, mapId: "walled", grid },
     });
@@ -251,7 +272,7 @@ test("试跑：在草稿图上用基线脚本跑一局，给出交火与经济�
   try {
     // 用 duel-01 的草稿（未保存）直接试跑
     const duel = ctx.registry.get("duel-01")!;
-    const res = (await ctx.app.inject({
+    const res = (await ctx.req({
       method: "POST", url: "/api/maps/playtest",
       payload: { map: duel, seed: 20261019, maxRounds: 60 },
     })).json();
@@ -265,11 +286,11 @@ test("试跑：在草稿图上用基线脚本跑一局，给出交火与经济�
     assert.ok(res.verdicts.some((v: string) => v.startsWith("✅")), JSON.stringify(res.verdicts));
 
     // 用 mapId 引用已注册地图也行；未知 mapId 要 404
-    const byId = (await ctx.app.inject({ method: "POST", url: "/api/maps/playtest", payload: { mapId: "duel-01", maxRounds: 20 } })).json();
+    const byId = (await ctx.req({ method: "POST", url: "/api/maps/playtest", payload: { mapId: "duel-01", maxRounds: 20 } })).json();
     assert.equal(byId.mapId, "duel-01");
-    const notFound = await ctx.app.inject({ method: "POST", url: "/api/maps/playtest", payload: { mapId: "nope" } });
+    const notFound = await ctx.req({ method: "POST", url: "/api/maps/playtest", payload: { mapId: "nope" } });
     assert.equal(notFound.statusCode, 404);
-    const noTarget = await ctx.app.inject({ method: "POST", url: "/api/maps/playtest", payload: {} });
+    const noTarget = await ctx.req({ method: "POST", url: "/api/maps/playtest", payload: {} });
     assert.equal(noTarget.statusCode, 400);
   } finally { await ctx.close(); }
 });
@@ -281,7 +302,7 @@ test("赛事全链路：Agent → 1v1 循环赛 → 回放/战报/复现键/排�
     const a = seedAgent(ctx, "玄武", "DeepSeek-V3", baseline);
     const b = seedAgent(ctx, "朱雀", "GPT-X", baseline);
 
-    const created = (await ctx.app.inject({
+    const created = (await ctx.req({
       method: "POST", url: "/api/tournaments",
       payload: { agentIds: [a, b], gamesPerPair: 2, mapId: "duel-01", seed: 4242, maxRounds: 40, name: "验收赛" },
     })).json();
@@ -290,11 +311,11 @@ test("赛事全链路：Agent → 1v1 循环赛 → 回放/战报/复现键/排�
     assert.equal(created.totalMatches, 2);
 
     // 参数校验：不存在的地图 / 未入库的 Agent
-    const badMap = await ctx.app.inject({ method: "POST", url: "/api/tournaments", payload: { agentIds: [a, b], mapId: "nope" } });
+    const badMap = await ctx.req({ method: "POST", url: "/api/tournaments", payload: { agentIds: [a, b], mapId: "nope" } });
     assert.equal(badMap.statusCode, 400);
     const notUploaded = seedAgent(ctx, "待上传", "m", baseline);
     ctx.store.deleteAgent(notUploaded); // 删掉后即"不存在"
-    const badAgent = await ctx.app.inject({ method: "POST", url: "/api/tournaments", payload: { agentIds: [a, notUploaded] } });
+    const badAgent = await ctx.req({ method: "POST", url: "/api/tournaments", payload: { agentIds: [a, notUploaded] } });
     assert.equal(badAgent.statusCode, 400);
 
     const t = await waitTournament(ctx, created.tournamentId);
@@ -303,7 +324,7 @@ test("赛事全链路：Agent → 1v1 循环赛 → 回放/战报/复现键/排�
     assert.equal(t.mapId, "duel-01");
     assert.equal(t.matchIds.length, 2);
 
-    const detail = (await ctx.app.inject({ method: "GET", url: `/api/tournaments/${created.tournamentId}` })).json();
+    const detail = (await ctx.req({ method: "GET", url: `/api/tournaments/${created.tournamentId}` })).json();
     assert.equal(detail.standings.length, 2);
     assert.equal(detail.matches.length, 2);
     assert.equal(detail.tournament.mapId, "duel-01");
@@ -321,7 +342,7 @@ test("赛事全链路：Agent → 1v1 循环赛 → 回放/战报/复现键/排�
 
     // 逐局检查回放/战报/复现键
     for (const matchId of t.matchIds) {
-      const replay = (await ctx.app.inject({ method: "GET", url: `/api/matches/${matchId}/replay` })).json();
+      const replay = (await ctx.req({ method: "GET", url: `/api/matches/${matchId}/replay` })).json();
       assert.ok(replay.events.length > 50);
       assert.equal(replay.events[0].t, "match_start");
       assert.equal(replay.events[replay.events.length - 1].t, "match_end");
@@ -342,7 +363,7 @@ test("赛事全链路：Agent → 1v1 循环赛 → 回放/战报/复现键/排�
         assert.ok(p.agentId === a || p.agentId === b);
       }
 
-      const report = await ctx.app.inject({ method: "GET", url: `/api/matches/${matchId}/report` });
+      const report = await ctx.req({ method: "GET", url: `/api/matches/${matchId}/report` });
       assert.equal(report.statusCode, 200);
       assert.match(report.headers["content-type"] as string, /markdown/);
       assert.match(report.body, /# 坦克对战战报/);
@@ -355,7 +376,7 @@ test("赛事全链路：Agent → 1v1 循环赛 → 回放/战报/复现键/排�
     }
 
     // 赛事战报（Markdown）
-    const tReport = await ctx.app.inject({ method: "GET", url: `/api/tournaments/${created.tournamentId}/report` });
+    const tReport = await ctx.req({ method: "GET", url: `/api/tournaments/${created.tournamentId}/report` });
     assert.equal(tReport.statusCode, 200);
     assert.match(tReport.body, /## 积分榜/);
     assert.match(tReport.body, /duel-01/);
@@ -368,20 +389,20 @@ test("赛事全链路：Agent → 1v1 循环赛 → 回放/战报/复现键/排�
     assert.notEqual(again.reproducibilityKey, other!.reproducibilityKey, "不同种子/座位顺序应产生不同复现键");
 
     // 排行榜：按 Agent 声明的模型名聚合
-    const board = (await ctx.app.inject({ method: "GET", url: "/api/leaderboard" })).json();
+    const board = (await ctx.req({ method: "GET", url: "/api/leaderboard" })).json();
     assert.equal(board.rows.length, 2);
     assert.deepEqual(board.rows.map((r: { modelId: string }) => r.modelId).sort(), ["DeepSeek-V3", "GPT-X"]);
     assert.ok(board.rows.every((r: { matches: number }) => r.matches === 2));
 
     // 赛事列表
-    const list = (await ctx.app.inject({ method: "GET", url: "/api/tournaments" })).json();
+    const list = (await ctx.req({ method: "GET", url: "/api/tournaments" })).json();
     const row = list.tournaments.find((x: { id: string }) => x.id === created.tournamentId)!;
     assert.equal(row.status, "finished");
     assert.equal(row.mapId, "duel-01");
     assert.equal(row.scriptProtocolVersion, SCRIPT_PROTOCOL_VERSION);
 
     // 同配置再战：新种子 + 同一张图 + 同一对 Agent
-    const rematch = (await ctx.app.inject({ method: "POST", url: `/api/matches/${firstId}/rematch` })).json();
+    const rematch = (await ctx.req({ method: "POST", url: `/api/matches/${firstId}/rematch` })).json();
     assert.ok(rematch.tournamentId && rematch.tournamentId !== created.tournamentId);
     assert.equal(rematch.mapId, "duel-01");
     const t2 = await waitTournament(ctx, rematch.tournamentId);
@@ -394,7 +415,10 @@ test("赛事全链路：Agent → 1v1 循环赛 → 回放/战报/复现键/排�
     const wsUrl = addr.replace(/^http/, "ws");
     type WsFrame = { type: string; data: { match?: { id: string }; events?: unknown[]; players?: unknown[]; ranking?: unknown[]; phase?: string } };
     const collect = async (path: string, until: (frames: WsFrame[]) => boolean, timeoutMs = 8000): Promise<WsFrame[]> => {
-      const socket = new WebSocket(`${wsUrl}${path}`);
+      // 观战 WebSocket 也要登录态：浏览器握手会自动带 Cookie，Node 客户端用 headers 选项带上
+      // （DOM 类型里没有这个重载，显式转一下）
+      const wsOptions = { headers: { cookie: ctx.cookie } } as unknown as string[];
+      const socket = new WebSocket(`${wsUrl}${path}`, wsOptions);
       const frames: WsFrame[] = [];
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error(`等待 WS 消息超时：${JSON.stringify(frames)}`)), timeoutMs);
@@ -431,13 +455,13 @@ test("赛事用的自定义地图：保存后可直接当赛图，且距离参�
     const b = seedAgent(ctx, "B", "M2", baseline);
 
     const duel = ctx.registry.get("duel-01")!;
-    const saved = (await ctx.app.inject({
+    const saved = (await ctx.req({
       method: "POST", url: "/api/maps",
       payload: { ...duel, mapId: "mini-duel", version: 1, hint: "赛事用自定义图", distanceReference_P1: undefined },
     })).json();
     assert.equal(saved.ok, true, JSON.stringify(saved.audit?.errors));
 
-    const created = (await ctx.app.inject({
+    const created = (await ctx.req({
       method: "POST", url: "/api/tournaments",
       payload: { agentIds: [a, b], gamesPerPair: 2, mapId: "mini-duel", seed: 7, maxRounds: 30 },
     })).json();
@@ -445,7 +469,7 @@ test("赛事用的自定义地图：保存后可直接当赛图，且距离参�
     const t = await waitTournament(ctx, created.tournamentId);
     assert.equal(t.status, "finished", t.error ?? "");
     assert.equal(t.mapId, "mini-duel");
-    const replay = (await ctx.app.inject({ method: "GET", url: `/api/matches/${t.matchIds[0]}/replay` })).json();
+    const replay = (await ctx.req({ method: "GET", url: `/api/matches/${t.matchIds[0]}/replay` })).json();
     assert.equal(replay.match.mapId, "mini-duel");
     assert.ok(replay.events.length > 20);
   } finally { await ctx.close(); }
@@ -454,14 +478,14 @@ test("赛事用的自定义地图：保存后可直接当赛图，且距离参�
 test("对局查询接口的边界", async () => {
   const ctx = await boot();
   try {
-    const notFound = await ctx.app.inject({ method: "GET", url: "/api/matches/nope" });
+    const notFound = await ctx.req({ method: "GET", url: "/api/matches/nope" });
     assert.equal(notFound.statusCode, 404);
-    const noReplay = await ctx.app.inject({ method: "GET", url: "/api/matches/nope/replay" });
+    const noReplay = await ctx.req({ method: "GET", url: "/api/matches/nope/replay" });
     assert.equal(noReplay.statusCode, 404);
     // 不存在的地图
-    const noMap = await ctx.app.inject({ method: "GET", url: "/api/maps/nope" });
+    const noMap = await ctx.req({ method: "GET", url: "/api/maps/nope" });
     assert.equal(noMap.statusCode, 404);
-    const noRules = await ctx.app.inject({ method: "GET", url: "/api/rulesets/9.9" });
+    const noRules = await ctx.req({ method: "GET", url: "/api/rulesets/9.9" });
     assert.equal(noRules.statusCode, 404);
     assert.equal(DEFAULT_RULESET.version, "1.1");
   } finally { await ctx.close(); }

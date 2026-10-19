@@ -21,22 +21,42 @@ const idle = `function onInit() {}\nfunction onTurn() { return [{ type: "wait" }
 
 async function boot() {
   const dir = mkdtempSync(join(tmpdir(), "ai-game-ext-"));
+  const base = loadConfig();
   const config: ServerConfig = {
-    ...loadConfig(),
+    ...base,
     port: 0,
     dataDir: dir,
     dbPath: join(dir, "test.db"),
     masterKey: randomBytes(32),
     defaultTurnIntervalMs: 20,
     logger: false,
+    // 仓库里没有默认密码：测试显式给一个
+    auth: { ...base.auth, password: "test-password" },
   };
   const store = new Store(config.dbPath, config.masterKey);
   const registry = new MapRegistry(join(dir, "maps"));
   const tournamentRunners = new Map<string, TournamentRunner>();
   const { app } = await createApp({ config, store, registry, tournamentRunners });
   await app.ready();
+  // 注册 Agent / 发起赛事都要登录（上传接口本身免登录、只验一次性密钥），先拿一个会话 Cookie
+  const login = await app.inject({
+    method: "POST", url: "/api/auth/login",
+    payload: { user: config.auth.user, password: config.auth.password },
+  });
+  const rawCookie = login.headers["set-cookie"];
+  const cookie = (Array.isArray(rawCookie) ? rawCookie[0]! : (rawCookie ?? "")).split(";")[0]!;
+  /** 只需覆盖测试里实际用到的字段，省得依赖 light-my-request 的类型推导 */
+  type ReqOptions = {
+    method: string;
+    url: string;
+    payload?: object | string | Buffer;
+    headers?: Record<string, string>;
+    query?: Record<string, string | string[]>;
+  };
   return {
-    app, store, config, registry, tournamentRunners, dir,
+    app, store, config, registry, tournamentRunners, dir, cookie,
+    /** 已登录的 inject：自动带上会话 Cookie */
+    req: (opts: ReqOptions) => app.inject({ ...opts, headers: { cookie, ...(opts.headers ?? {}) } }),
     close: async () => {
       await app.close();
       store.close();
@@ -48,7 +68,7 @@ async function boot() {
 type Ctx = Awaited<ReturnType<typeof boot>>;
 
 async function register(ctx: Ctx, overrides: Record<string, unknown> = {}) {
-  const res = await ctx.app.inject({
+  const res = await ctx.req({
     method: "POST", url: "/api/agents",
     payload: { modelName: "DeepSeek-V3", agentName: "玄武", thinkingLevel: "high", notes: "偏经济流", ...overrides },
   });
@@ -61,7 +81,7 @@ async function register(ctx: Ctx, overrides: Record<string, unknown> = {}) {
 }
 
 function upload(ctx: Ctx, key: string, zip: Buffer, contentType = "application/zip") {
-  return ctx.app.inject({ method: "POST", url: "/api/upload", headers: { authorization: `Bearer ${key}`, "content-type": contentType }, payload: zip });
+  return ctx.req({ method: "POST", url: "/api/upload", headers: { authorization: `Bearer ${key}`, "content-type": contentType }, payload: zip });
 }
 
 async function uploadScript(ctx: Ctx, agentKey: string, script: string, extra: { name: string; data: string }[] = []) {
@@ -92,7 +112,7 @@ test("注册：字段齐全、密钥只回一次、库里不存明文、列表�
     assert.equal(reg.limits.zipMaxBytes, 200 * 1024);
     assert.equal(reg.limits.zipMaxBytes, 204800);
 
-    const list = (await ctx.app.inject({ method: "GET", url: "/api/agents" })).json().agents as { keyMasked: string; key?: string; thinkingLevel: string; notes: string }[];
+    const list = (await ctx.req({ method: "GET", url: "/api/agents" })).json().agents as { keyMasked: string; key?: string; thinkingLevel: string; notes: string }[];
     assert.equal(list.length, 1);
     assert.equal(list[0]!.key, undefined, "列表不得返回明文密钥");
     assert.equal(list[0]!.thinkingLevel, "high");
@@ -103,9 +123,9 @@ test("注册：字段齐全、密钥只回一次、库里不存明文、列表�
     assert.equal(raw.includes(Buffer.from(reg.key)), false, "数据库中不得出现明文注册密钥");
 
     // 参数校验
-    const bad = await ctx.app.inject({ method: "POST", url: "/api/agents", payload: { modelName: "", agentName: "x" } });
+    const bad = await ctx.req({ method: "POST", url: "/api/agents", payload: { modelName: "", agentName: "x" } });
     assert.equal(bad.statusCode, 400);
-    const badLevel = await ctx.app.inject({ method: "POST", url: "/api/agents", payload: { modelName: "m", agentName: "a", thinkingLevel: "god" } });
+    const badLevel = await ctx.req({ method: "POST", url: "/api/agents", payload: { modelName: "m", agentName: "a", thinkingLevel: "god" } });
     assert.equal(badLevel.statusCode, 400);
   } finally { await ctx.close(); }
 });
@@ -225,7 +245,7 @@ test("重新签发密钥：旧密钥失效、新密钥可用", async () => {
   const ctx = await boot();
   try {
     const reg = await register(ctx);
-    const reissued = (await ctx.app.inject({ method: "POST", url: `/api/agents/${reg.agent.id}/reissue` })).json() as { key: string; agent: { keyMasked: string } };
+    const reissued = (await ctx.req({ method: "POST", url: `/api/agents/${reg.agent.id}/reissue` })).json() as { key: string; agent: { keyMasked: string } };
     assert.ok(reissued.key.startsWith("ag_"));
     assert.notEqual(reissued.key, reg.key);
     const old = await uploadScript(ctx, reg.key, baseline);
@@ -238,7 +258,7 @@ test("重新签发密钥：旧密钥失效、新密钥可用", async () => {
 test("任务书：Markdown 含协议/地图/数值/上传规范；JSON 形态给出端点与上限", async () => {
   const ctx = await boot();
   try {
-    const md = await ctx.app.inject({ method: "GET", url: "/api/task-doc" });
+    const md = await ctx.req({ method: "GET", url: "/api/task-doc" });
     assert.equal(md.statusCode, 200);
     assert.match(md.headers["content-type"] as string, /markdown/);
     const text = md.body;
@@ -247,7 +267,7 @@ test("任务书：Markdown 含协议/地图/数值/上传规范；JSON 形态给
     }
     assert.equal(/\{\{[A-Z_0-9]+\}\}/.test(text), false, "不得残留未替换的占位符");
 
-    const json = (await ctx.app.inject({ method: "GET", url: "/api/task-doc?format=json" })).json();
+    const json = (await ctx.req({ method: "GET", url: "/api/task-doc?format=json" })).json();
     assert.equal(json.version, "v1.0");
     assert.equal(json.mapId, DEFAULT_MAP_1V1, "任务书默认给 1v1 决斗图");
     assert.match(json.endpoints.upload, /\/api\/upload$/);
@@ -256,11 +276,11 @@ test("任务书：Markdown 含协议/地图/数值/上传规范；JSON 形态给
     assert.ok(json.markdown.includes("duel-01"), "任务书正文必须写明实际地图");
 
     // 显式指定另一张地图：正文与 mapId 都要跟着换
-    const other = (await ctx.app.inject({ method: "GET", url: `/api/task-doc?mapId=${DEFAULT_MAP_MULTI}&format=json` })).json();
+    const other = (await ctx.req({ method: "GET", url: `/api/task-doc?mapId=${DEFAULT_MAP_MULTI}&format=json` })).json();
     assert.equal(other.mapId, DEFAULT_MAP_MULTI);
     assert.ok(other.markdown.includes(DEFAULT_MAP_MULTI) && !other.markdown.includes("duel-01"), "换图后正文不应再出现另一张图");
     // 未知地图 → 404
-    const bad = await ctx.app.inject({ method: "GET", url: "/api/task-doc?mapId=nope" });
+    const bad = await ctx.req({ method: "GET", url: "/api/task-doc?mapId=nope" });
     assert.equal(bad.statusCode, 404);
   } finally { await ctx.close(); }
 });
@@ -278,7 +298,7 @@ test("1v1 赛事：积分榜排名正确、每局可回放可看战报、未校�
 
     // 未上传的 Agent 不能参赛
     const reg4 = await register(ctx, { agentName: "没交作业" });
-    const rejected = await ctx.app.inject({
+    const rejected = await ctx.req({
       method: "POST", url: "/api/tournaments",
       payload: { agentIds: [a.agent.id, reg4.agent.id], gamesPerPair: 1, maxRounds: 30 },
     });
@@ -286,20 +306,20 @@ test("1v1 赛事：积分榜排名正确、每局可回放可看战报、未校�
     assert.match(rejected.json().error, /尚未通过校验/);
 
     // 未知地图被拒；指定 arena-01 则赛事记录该地图
-    const badMap = await ctx.app.inject({
+    const badMap = await ctx.req({
       method: "POST", url: "/api/tournaments",
       payload: { agentIds: [a.agent.id, b.agent.id], mapId: "no-such-map" },
     });
     assert.equal(badMap.statusCode, 400);
     assert.match(badMap.json().error, /未知地图/);
-    const onArena = (await ctx.app.inject({
+    const onArena = (await ctx.req({
       method: "POST", url: "/api/tournaments",
       payload: { agentIds: [a.agent.id, b.agent.id], gamesPerPair: 1, maxRounds: 20, mapId: DEFAULT_MAP_MULTI, seed: 5 },
     })).json();
     assert.equal(onArena.mapId, DEFAULT_MAP_MULTI);
     await waitTournament(ctx, onArena.tournamentId);
 
-    const created = (await ctx.app.inject({
+    const created = (await ctx.req({
       method: "POST", url: "/api/tournaments",
       payload: { agentIds: [a.agent.id, b.agent.id, c.agent.id], gamesPerPair: 2, name: "回归测试赛", seed: 20261019, maxRounds: 60 },
     })).json();
@@ -310,7 +330,7 @@ test("1v1 赛事：积分榜排名正确、每局可回放可看战报、未校�
     const finished = await waitTournament(ctx, created.tournamentId);
     assert.equal(finished.status, "finished", finished.error ?? "");
 
-    const detail = (await ctx.app.inject({ method: "GET", url: `/api/tournaments/${created.tournamentId}` })).json();
+    const detail = (await ctx.req({ method: "GET", url: `/api/tournaments/${created.tournamentId}` })).json();
     const standings = detail.standings as { rank: number; agentName: string; played: number; points: number; scoreDiff: number; totalUnitsDeposited: number }[];
     assert.equal(standings.length, 3);
     for (const s of standings) assert.equal(s.played, 4, "每个 Agent 应打 4 局");
@@ -323,23 +343,23 @@ test("1v1 赛事：积分榜排名正确、每局可回放可看战报、未校�
     for (const m of detail.matches) {
       assert.equal(m.status, "finished");
       // 每局都能回放与看战报（与平台内部流程同权）
-      const replay = (await ctx.app.inject({ method: "GET", url: `/api/matches/${m.matchId}/replay` })).json();
+      const replay = (await ctx.req({ method: "GET", url: `/api/matches/${m.matchId}/replay` })).json();
       assert.ok(replay.events.length > 20, `对局 ${m.matchId} 应有事件流`);
       assert.equal(replay.ranking.length, 2);
-      const report = await ctx.app.inject({ method: "GET", url: `/api/matches/${m.matchId}/report` });
+      const report = await ctx.req({ method: "GET", url: `/api/matches/${m.matchId}/report` });
       assert.equal(report.statusCode, 200);
       assert.match(report.body, /赛事对局/);
       assert.match(report.body, /得分明细/);
     }
 
     // 赛事战报
-    const tReport = await ctx.app.inject({ method: "GET", url: `/api/tournaments/${created.tournamentId}/report` });
+    const tReport = await ctx.req({ method: "GET", url: `/api/tournaments/${created.tournamentId}/report` });
     assert.equal(tReport.statusCode, 200);
     assert.match(tReport.body, /赛事战报/);
     assert.match(tReport.body, /积分榜/);
 
     // 列表接口
-    const list = (await ctx.app.inject({ method: "GET", url: "/api/tournaments" })).json().tournaments as { id: string; status: string; finishedMatches: number; matchCount: number; mapId?: string }[];
+    const list = (await ctx.req({ method: "GET", url: "/api/tournaments" })).json().tournaments as { id: string; status: string; finishedMatches: number; matchCount: number; mapId?: string }[];
     assert.equal(list.length, 2, "本用例创建了两场赛事（默认图 + 显式 arena-01）");
     const main = list.find((t) => t.id === created.tournamentId)!;
     assert.equal(main.status, "finished");
@@ -348,7 +368,7 @@ test("1v1 赛事：积分榜排名正确、每局可回放可看战报、未校�
     assert.equal(main.mapId, DEFAULT_MAP_1V1, "列表也要带地图");
 
     // 排行榜把外部 Agent 也统计进去（按 modelName 聚合）
-    const board = (await ctx.app.inject({ method: "GET", url: "/api/leaderboard" })).json().rows as { modelId: string; matches: number }[];
+    const board = (await ctx.req({ method: "GET", url: "/api/leaderboard" })).json().rows as { modelId: string; matches: number }[];
     assert.ok(board.some((r) => r.modelId === "model-A"), "排行榜应包含外部 Agent 的模型");
   } finally { await ctx.close(); }
 });

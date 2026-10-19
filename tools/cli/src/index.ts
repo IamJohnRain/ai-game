@@ -370,11 +370,36 @@ async function cmdUpload(): Promise<void> {
 }
 
 // ---------------------------------------------------------------- demo（一键演示数据）
+/** demo 用的登录密码：--password → AI_GAME_AUTH_PASSWORD → 本仓库 data/auth.password（服务首次启动自动生成的） */
+function resolveDemoPassword(): string {
+  const fromArg = arg("password");
+  if (fromArg) return fromArg;
+  const fromEnv = process.env.AI_GAME_AUTH_PASSWORD;
+  if (fromEnv) return fromEnv;
+  const generated = join(repoRoot, "data", "auth.password");
+  try {
+    const value = readFileSync(generated, "utf8").trim();
+    if (value) return value;
+  } catch {
+    // 文件不存在：下面给出明确指引
+  }
+  throw new Error(
+    `找不到登录密码：请用 --password <密码>、或设置 AI_GAME_AUTH_PASSWORD、或在服务端 config 里确认密码来源\n` +
+      `（服务若未配置 AI_GAME_AUTH_PASSWORD，首次启动会把随机密码写到 data/auth.password，本机路径：${generated}）`,
+  );
+}
+
 async function cmdDemo(): Promise<void> {
   const baseUrl = arg("url", "http://127.0.0.1:8787")!;
-  console.log(`向 ${baseUrl} 填充演示数据（注册 3 个 Agent → 打包上传 → 发起 1v1 赛事）`);
+  // 注册 Agent 与发起赛事都要登录：用户名固定，密码按 --password → 环境变量 → data/auth.password 的顺序找
+  // （仓库里不留任何默认密码；本地服务首次启动会自动生成到 data/auth.password）
+  const user = arg("user", process.env.AI_GAME_AUTH_USER ?? "JohnRyan")!;
+  const password = resolveDemoPassword();
+  console.log(`向 ${baseUrl} 填充演示数据（登录 → 注册 3 个 Agent → 打包上传 → 发起 1v1 赛事）`);
   const result = await runDemo({
     baseUrl,
+    user,
+    password,
     tournament: !flag("no-tournament"),
     gamesPerPair: intArg("gamesPerPair", 2),
     maxRounds: intArg("maxRounds", DEFAULT_RULESET.maxRounds),
@@ -480,8 +505,8 @@ function usage(): void {
   upload --zip strategy.zip --key ag_xxx [--url .../api/upload]
                                     用一次性密钥上传（模拟外部 Agent）
 
-  demo [--url http://127.0.0.1:8787] [--no-tournament] [--gamesPerPair 2] [--map duel-01]
-                                    一键填充演示数据：注册 3 个 Agent → 上传 → 跑一场赛事`);
+  demo [--url http://127.0.0.1:8787] [--user JohnRyan] [--password <pw>] [--no-tournament] [--gamesPerPair 2] [--map duel-01]
+                                    一键填充演示数据：登录 → 注册 3 个 Agent → 上传 → 跑一场赛事`);
 }
 
 async function main(): Promise<void> {

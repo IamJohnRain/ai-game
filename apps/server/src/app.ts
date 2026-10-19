@@ -15,6 +15,16 @@ import type { MapRegistry } from "./maps.ts";
 import { Store } from "./store.ts";
 import { registerExternalRoutes } from "./routesExternal.ts";
 import { TournamentRunner } from "./tournaments.ts";
+import {
+  Auth,
+  clearSessionCookieValue,
+  isPublicRoute,
+  parseCookies,
+  safeNextPath,
+  sessionCookieValue,
+  SESSION_COOKIE,
+} from "./auth.ts";
+import { renderLoginPage } from "./loginPage.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..", "..");
@@ -35,8 +45,63 @@ export async function createApp(deps: AppDeps) {
   const registry = deps.registry;
   const tournamentRunners = deps.tournamentRunners ?? new Map<string, TournamentRunner>();
   const app = Fastify({ logger: deps.config.logger ?? { level: process.env.LOG_LEVEL ?? "info" } });
+  const auth = new Auth(deps.config.auth);
 
   await app.register(websocket);
+
+// ------------------------------------------------------------------ 会话守卫
+// 白名单之外的一切（页面 / 静态资源 / /api / /ws）都要求登录：
+//   - /api/* 与 /ws/* 回 401（前端拿到 401 会跳登录页；WebSocket 握手拿不到自定义头，靠 Cookie）
+//   - 其余请求 302 到 /login?next=…（未登录时前端 bundle 不下发，见 loginPage.ts 的注释）
+// 免登录的只有：任务书（外部 Agent 要读，GET /api/task-doc）、上传（改用一次性密钥把关，见 routesExternal.ts）、
+// 登录页与登录/登出接口本身。守卫必须注册在**所有路由之前**，Fastify 的 hook 只对其后注册的路由生效。
+app.addHook("onRequest", async (req, reply) => {
+  if (isPublicRoute(req.method, req.url)) return;
+  const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+  if (auth.authenticate(token)) return;
+  const path = req.url.split("?")[0] ?? "";
+  if (path.startsWith("/api/") || path.startsWith("/ws/")) {
+    return reply.code(401).send({ ok: false, stage: "auth", error: "未登录或会话已过期，请先登录" });
+  }
+  return reply.redirect(`/login?next=${encodeURIComponent(req.url)}`);
+});
+
+// ------------------------------------------------------------------ 登录 / 登出 / 我是谁
+app.get("/login", async (req, reply) => {
+  const next = safeNextPath((req.query as { next?: string }).next);
+  const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+  if (auth.authenticate(token)) return reply.redirect(next); // 已登录就别再看登录页
+  reply.header("content-type", "text/html; charset=utf-8");
+  reply.header("cache-control", "no-store");
+  return renderLoginPage({ next });
+});
+
+app.post("/api/auth/login", async (req, reply) => {
+  const body = (req.body ?? {}) as { user?: unknown; password?: unknown };
+  const user = typeof body.user === "string" ? body.user : "";
+  const password = typeof body.password === "string" ? body.password : "";
+  const result = auth.login(user, password, req.ip);
+  if (!result.ok) {
+    if (result.status === 429) app.log.warn({ ip: req.ip }, "登录被限流");
+    reply.code(result.status);
+    return { ok: false, error: result.error };
+  }
+  reply.header("set-cookie", sessionCookieValue(result.token, auth.sessionTtlMs, auth.cookieSecure));
+  app.log.info({ ip: req.ip, user: auth.user }, "登录成功");
+  return { ok: true, user: auth.user, expiresAt: new Date(result.expiresAt).toISOString() };
+});
+
+app.post("/api/auth/logout", async (req, reply) => {
+  auth.logout(parseCookies(req.headers.cookie)[SESSION_COOKIE]);
+  reply.header("set-cookie", clearSessionCookieValue());
+  return { ok: true };
+});
+
+app.get("/api/auth/me", async (req, reply) => {
+  const session = auth.authenticate(parseCookies(req.headers.cookie)[SESSION_COOKIE]);
+  if (!session) return fail(reply, 401, "未登录或会话已过期");
+  return { user: session.user, expiresAt: new Date(session.expiresAt).toISOString() };
+});
 
 // ------------------------------------------------------------------ 工具
 function fail(reply: FastifyReply, code: number, message: string): undefined {
@@ -314,6 +379,15 @@ app.register(async (instance) => {
 
 // ------------------------------------------------------------------ 静态前端（构建产物存在时）
 const webDist = join(repoRoot, "apps", "web", "dist");
+// 浏览器会自动请求它；没有图标文件就回 204，避免这次请求落到下面的 SPA 回落（index.html 应当登录后才下发）
+app.get("/favicon.ico", async (_req, reply) => {
+  const icon = join(webDist, "favicon.ico");
+  if (existsSync(icon)) {
+    reply.header("content-type", "image/x-icon");
+    return reply.send(createReadStream(icon));
+  }
+  return reply.code(204).send();
+});
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".json": "application/json",
@@ -356,5 +430,5 @@ app.get("/*", async (req, reply) => {
     void reply.code(error.statusCode ?? 500).send({ error: error.message });
   });
 
-  return { app, store, registry, tournamentRunners };
+  return { app, store, registry, tournamentRunners, auth };
 }

@@ -2,7 +2,7 @@
 // 刻意不引入路由库：页面之间只有"当前页 + 当前比赛/赛事 id"这点状态，useState 足够且刷新语义可控。
 // 导航只反映平台的唯一参赛链路：Agent 自助接入 → 赛事 → 观战/回放/战报，外加地图编辑器。
 import { useEffect, useState } from "react";
-import { api, type MatchSummary } from "./api";
+import { api, logout, whoami, type MatchSummary } from "./api";
 import { AgentsPage } from "./pages/AgentsPage";
 import { TournamentPage } from "./pages/TournamentPage";
 import { WatchPage } from "./pages/WatchPage";
@@ -37,6 +37,22 @@ export function App() {
   const [lastMatchId, setLastMatchId] = useState<string | null>(null);
   const [health, setHealth] = useState<{ ok: boolean; version: string } | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
+  /** 当前登录用户（顶栏展示 + 退出登录）；未登录时 whoami 会 401，api.ts 直接把人送去登录页 */
+  const [user, setUser] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    whoami()
+      .then((me) => {
+        if (alive) setUser(me.user);
+      })
+      .catch(() => {
+        /* 401 已由 api.ts 送去登录页，这里不用再报错 */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -107,6 +123,12 @@ export function App() {
           ) : (
             <Badge tone="muted">检测后端…</Badge>
           )}
+          {user ? <span className="muted small" title="当前登录账号">已登录 {user}</span> : null}
+          {user ? (
+            <button className="btn btn-sm" onClick={() => void logout()}>
+              退出登录
+            </button>
+          ) : null}
         </div>
       </header>
 
