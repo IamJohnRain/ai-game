@@ -41,6 +41,8 @@ type Credential = {
   limits: UploadLimits | null;
   /** 可直接粘给目标 Agent 的启动提示（服务端渲染；老版本服务端不返回时为 null） */
   prompt: string | null;
+  /** 练习通道地址（自测用；老版本服务端不返回时为 null） */
+  practiceUrl: string | null;
   origin: "register" | "reissue";
 };
 
@@ -211,6 +213,7 @@ export function AgentsPage({ onGotoTournament }: { onGotoTournament: (tournament
         taskDocUrl: res.taskDocUrl ? asHref(res.taskDocUrl) : "/api/task-doc",
         limits: res.limits ?? null,
         prompt: res.prompt ?? null,
+        practiceUrl: res.practiceUrl ? asHref(res.practiceUrl) : null,
         origin: "register",
       });
       setCopyState(null);
@@ -237,6 +240,7 @@ export function AgentsPage({ onGotoTournament }: { onGotoTournament: (tournament
         taskDocUrl: res.taskDocUrl ? asHref(res.taskDocUrl) : (cur?.taskDocUrl ?? "/api/task-doc"),
         limits: cur?.limits ?? taskDoc?.limits ?? null,
         prompt: res.prompt ?? null,
+        practiceUrl: res.practiceUrl ? asHref(res.practiceUrl) : (cur?.practiceUrl ?? null),
         origin: "reissue",
       }));
       setCopyState(null);
@@ -407,6 +411,9 @@ export function AgentsPage({ onGotoTournament }: { onGotoTournament: (tournament
                 <span>
                   上传接口：<code>{uploadUrl ?? "（服务端未返回上传地址）"}</code>
                 </span>
+                <span>
+                  练习通道（自测，不消耗密钥）：<code>{credential.practiceUrl ?? "/api/practice"}</code>
+                </span>
               </div>
               {uploadUrl ? (
                 <>
@@ -572,6 +579,7 @@ export function AgentsPage({ onGotoTournament }: { onGotoTournament: (tournament
                   <th>密钥</th>
                   <th>尝试次数</th>
                   <th>创建时间</th>
+                  <th>版本 / 自测</th>
                   <th>上传时间</th>
                   <th>脚本哈希</th>
                   <th />
@@ -600,6 +608,12 @@ export function AgentsPage({ onGotoTournament }: { onGotoTournament: (tournament
                         <td className="mono small">{a.keyMasked || "-"}</td>
                         <td className="mono small">
                           {a.attempts} / {a.maxAttempts}
+                        </td>
+                        <td className="small">
+                          <Badge tone={a.revision > 0 ? "ok" : "muted"}>v{a.revision}</Badge>{" "}
+                          <Badge tone={a.practiceRuns > 0 ? "info" : "muted"} title="练习通道：不消耗正式提交、不计分">
+                            自测 {a.practiceRuns}/{a.maxPracticeRuns}
+                          </Badge>
                         </td>
                         <td className="small">{fmtTime(a.createdAt)}</td>
                         <td className="small">{fmtTime(a.uploadedAt)}</td>
