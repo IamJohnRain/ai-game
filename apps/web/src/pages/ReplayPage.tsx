@@ -283,31 +283,31 @@ export function ReplayPage({
       />
 
       {acc && view ? (
-        <>
-          <div className="watch-main">
-            <div className="watch-board">
-              <BattleCanvas
-                map={bundle.map}
-                terrain={acc.terrain}
-                view={view}
-                rules={bundle.rules}
-                viewpoint={viewpoint}
-                version={frame}
-              />
-              <div className="board-note">
-                当前：第 {view.round} 回合 · 第 {view.turn} 个回合动作（事件 {index} / {bundle.events.length}）。
-                {viewpoint === null
-                  ? "上帝视角。"
-                  : ` 仅显示 P${viewpoint} 视野内信息，其余为迷雾。`}
-              </div>
-            </div>
-            <div className="watch-log">
-              <EventLog log={view.log} version={frame} seats={seats} />
+        <div className="watch-main">
+          {/* 与观战页同一套布局：得分看板在左侧纵向排布 */}
+          <aside className="watch-scores" aria-label="得分看板">
+            <ScoreCards view={view} rules={bundle.rules} players={bundle.players} />
+          </aside>
+          <div className="watch-board">
+            <BattleCanvas
+              map={bundle.map}
+              terrain={acc.terrain}
+              view={view}
+              rules={bundle.rules}
+              viewpoint={viewpoint}
+              version={frame}
+            />
+            <div className="board-note">
+              当前：第 {view.round} 回合 · 第 {view.turn} 个回合动作（事件 {index} / {bundle.events.length}）。
+              {viewpoint === null
+                ? "上帝视角。"
+                : ` 仅显示 P${viewpoint} 视野内信息，其余为迷雾。`}
             </div>
           </div>
-
-          <ScoreCards view={view} rules={bundle.rules} players={bundle.players} />
-        </>
+          <div className="watch-log">
+            <EventLog log={view.log} version={frame} seats={seats} />
+          </div>
+        </div>
       ) : (
         <div className="hint">没有事件可播放。</div>
       )}

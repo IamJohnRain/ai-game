@@ -779,11 +779,18 @@ textarea {
   flex-wrap: wrap;
 }
 
+/* 观战/回放三栏：左侧得分栏（纵向卡片）· 棋盘 · 事件日志 */
 .watch-main {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 400px;
+  grid-template-columns: 208px minmax(0, 1fr) 400px;
   gap: 16px;
   align-items: start;
+}
+
+@media (max-width: 1560px) {
+  .watch-main {
+    grid-template-columns: 190px minmax(0, 1fr) 320px;
+  }
 }
 
 @media (max-width: 1180px) {
@@ -799,6 +806,65 @@ textarea {
   border-radius: var(--radius);
   padding: 12px;
   box-shadow: var(--shadow);
+}
+
+/* 左侧得分栏：卡片一律纵向排布、宽度收窄到栏宽；窄卡片里把次要信息折行显示 */
+.watch-scores .cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.watch-scores .card {
+  padding: 10px 12px;
+  gap: 7px;
+}
+
+.watch-scores .card-head {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+/* 窄卡片里让"座位 · 模型名"独占一行并允许折行，避免被徽章挤成省略号 */
+.watch-scores .card-title {
+  flex: 1 1 100%;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: break-word;
+}
+
+.watch-scores .card-head .badge {
+  margin-left: 0;
+}
+
+.watch-scores .card-score {
+  flex-wrap: wrap;
+  gap: 6px 8px;
+}
+
+.watch-scores .score-num {
+  font-size: 20px;
+}
+
+/* 让"在场/阵亡"自己占一行，别把分数挤变形 */
+.watch-scores .alive-tag {
+  margin-left: 0;
+  flex: 1 1 100%;
+}
+
+.watch-scores .card-foot {
+  flex-direction: column;
+  gap: 3px;
+}
+
+.watch-scores .pbar-label {
+  width: 26px;
+}
+
+.watch-scores .pbar-value {
+  width: 48px;
+  font-size: 10px;
 }
 
 .board {

@@ -371,30 +371,30 @@ export function WatchPage({ matchId, onOpen, onGotoTournament }: WatchPageProps)
       </div>
 
       {acc && view ? (
-        <>
-          <div className="watch-main">
-            <div className="watch-board">
-              <BattleCanvas
-                map={bundle.map}
-                terrain={acc.terrain}
-                view={view}
-                rules={bundle.rules}
-                viewpoint={viewpoint}
-                version={frame}
-              />
-              <div className="board-note">
-                {viewpoint === null
-                  ? "上帝视角：看到全部坦克、资源余量与事件。"
-                  : `P${viewpoint} 视角：视野半径 ${bundle.rules.visionRadius} 格（视线被墙与森林遮挡，森林中的敌人在 ${bundle.rules.forestStealthRadius} 格外不可见）；视野外显示最后一次目击的虚影，记忆保留 ${bundle.rules.lastKnownMemoryRounds} 回合。`}
-              </div>
-            </div>
-            <div className="watch-log">
-              <EventLog log={view.log} version={frame} seats={seats} />
+        <div className="watch-main">
+          {/* 得分看板：挪到左侧、卡片纵向排布（窄卡片一列到底） */}
+          <aside className="watch-scores" aria-label="得分看板">
+            <ScoreCards view={view} rules={bundle.rules} players={players} ranking={ranking} />
+          </aside>
+          <div className="watch-board">
+            <BattleCanvas
+              map={bundle.map}
+              terrain={acc.terrain}
+              view={view}
+              rules={bundle.rules}
+              viewpoint={viewpoint}
+              version={frame}
+            />
+            <div className="board-note">
+              {viewpoint === null
+                ? "上帝视角：看到全部坦克、资源余量与事件。"
+                : `P${viewpoint} 视角：视野半径 ${bundle.rules.visionRadius} 格（视线被墙与森林遮挡，森林中的敌人在 ${bundle.rules.forestStealthRadius} 格外不可见）；视野外显示最后一次目击的虚影，记忆保留 ${bundle.rules.lastKnownMemoryRounds} 回合。`}
             </div>
           </div>
-
-          <ScoreCards view={view} rules={bundle.rules} players={players} ranking={ranking} />
-        </>
+          <div className="watch-log">
+            <EventLog log={view.log} version={frame} seats={seats} />
+          </div>
+        </div>
       ) : (
         <div className="hint">等待第一条事件…</div>
       )}
