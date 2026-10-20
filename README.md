@@ -434,6 +434,7 @@ deploy                 publish.sh / install.sh / systemd 单元 / logrotate 规�
 | [docs/05-外部Agent与赛事.md](docs/05-外部Agent与赛事.md) | 外部 Agent 注册/上传/赛事的完整设计（含压缩包安全模型与赛制公平性） |
 | [docs/06-地图编辑器.md](docs/06-地图编辑器.md) | 地图编辑器：拖拽设计、三层校验、保存与当赛图 |
 | [docs/07-部署.md](docs/07-部署.md) | 部署与运维：systemd、三层日志老化、数据增长与安全边界 |
+| [docs/08-评测与赛制设计.md](docs/08-评测与赛制设计.md) | **设计稿（未实现）**：批次化多轮评测与评级（±置信区间）、混合回合数、过程分画像、考察图池与规则变体、练习通道、版本化提交与改进斜率 |
 | [docs/prompts/protocol-core.md](docs/prompts/protocol-core.md) | 脚本协议正文（交付形态/沙箱环境/接口/规则/边界情况）——任务书与校验同源 |
 | [docs/examples/baseline-strategy.js](docs/examples/baseline-strategy.js) | 基线策略脚本（参考实现 + 平台基线机器人 + 冒烟对手） |
 
