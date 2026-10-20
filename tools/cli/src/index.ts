@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // tools/cli/src/index.ts —— 平台命令行：地图校验/审计、平衡性仿真、脚本准入检查、外部 Agent 流程自测
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { DEFAULT_RULESET, BUILTIN_MAPS, DEFAULT_MAP_1V1, defaultMapId, renderAscii, type GameMap, type Ruleset } from "@ai-game/protocol";
@@ -61,13 +61,20 @@ function loadRules(): Ruleset {
 // 不传路径时校验 maps/ 下的全部地图，并断言「文件 ↔ BUILTIN_MAPS 注册表」双向一致
 function cmdVerifyMap(): void {
   const mapsDir = join(repoRoot, "packages", "protocol", "maps");
+  // 考察图（docs/08 §5.1）：不是内置图（不进 BUILTIN_MAPS、不参与 check-docs 的 ASCII 对照），
+  // 但必须随时可校验——它们会被部署脚本装进 data/maps，从而进入准入校验与赛事图池。
+  const evalDir = join(repoRoot, "maps", "eval");
+  const evalFiles = existsSync(evalDir)
+    ? readdirSync(evalDir).filter((f) => f.endsWith(".json")).sort().map((f) => join(evalDir, f))
+    : [];
   const explicit = positional()[1];
-  const files = explicit ? [explicit] : readdirSync(mapsDir).filter((f) => f.endsWith(".json")).map((f) => join(mapsDir, f));
+  const builtinFiles = readdirSync(mapsDir).filter((f) => f.endsWith(".json")).map((f) => join(mapsDir, f));
+  const files = explicit ? [explicit] : [...builtinFiles, ...evalFiles];
   let failed = false;
   const seen = new Set<string>();
   for (const path of files) {
     const map = JSON.parse(readFileSync(path, "utf8")) as GameMap;
-    seen.add(map.mapId);
+    if (builtinFiles.includes(path)) seen.add(map.mapId);
     const errs = validateMap(map);
     console.log(`\n--- ${map.mapId}@${map.version}（${path.replace(repoRoot + "\\", "").replace(repoRoot + "/", "")}）---`);
     console.log(renderAscii(map));

@@ -20,6 +20,10 @@ export interface ServerConfig {
   defaultTurnIntervalMs: number;
   /** 单用户并发比赛数上限 */
   maxConcurrentMatches: number;
+  /** 每个 Agent 允许提交的脚本版本数上限（每版一把一次性密钥，超限需组织者放行） */
+  maxRevisions: number;
+  /** 练习通道配额（不消耗正式提交，docs/08 §6） */
+  practiceRuns: number;
   /**
    * 对外可访问的基础地址（可选）：设置后，注册响应与任务书里的 URL 一律用它。
    * 用途：组织者自己可能是通过 SSH 隧道 / 内网地址访问平台的，但**外部 Agent 拿到的地址必须是它自己能访问到的那一个**。
@@ -61,6 +65,8 @@ export function loadConfig(): ServerConfig {
     masterKey,
     defaultTurnIntervalMs: Number(process.env.AI_GAME_TURN_INTERVAL_MS ?? 1200),
     maxConcurrentMatches: Number(process.env.AI_GAME_MAX_CONCURRENT ?? 4),
+    maxRevisions: Number(process.env.AI_GAME_MAX_REVISIONS ?? 3),
+    practiceRuns: Number(process.env.AI_GAME_PRACTICE_RUNS ?? 5),
     publicUrl: (process.env.AI_GAME_PUBLIC_URL ?? "").trim().replace(/\/+$/, ""),
     auth: {
       // 用户名固定（需求如此）；密码**没有内置默认值**：

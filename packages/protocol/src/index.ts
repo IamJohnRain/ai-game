@@ -2,6 +2,7 @@
 export * from "./pos.ts";
 export * from "./map.ts";
 export * from "./rules.ts";
+export * from "./rules-variants.ts";
 export * from "./types.ts";
 
 import mapV1 from "../maps/arena-01.json" with { type: "json" };

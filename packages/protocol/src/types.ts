@@ -187,6 +187,8 @@ export interface PlayerStats {
   strikes: number;
   disqualified: boolean;
   avgDecisionMs: number;
+  /** 单回合最长决策耗时（毫秒）：用来抓"偶尔卡死"的脚本 */
+  maxDecisionMs: number;
   scoreBreakdown: ScoreBreakdown;
   disqualifiedKind?: string;
 }

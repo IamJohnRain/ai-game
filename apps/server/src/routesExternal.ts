@@ -15,6 +15,8 @@ import type { ServerConfig } from "./config.ts";
 import { bearerFrom, generateAgentKey, hashAgentKey, maskAgentKey } from "./agentKeys.ts";
 import type { MapRegistry } from "./maps.ts";
 import type { Store, AgentRow } from "./store.ts";
+import { mapCheckStatusToStage, type UploadStage } from "./uploadStages.ts";
+import { registerPracticeRoute } from "./practice.ts";
 import { TournamentRunner } from "./tournaments.ts";
 
 /** onRequest 里验过密钥后，把 agent 挂到请求上给处理器复用（不再查一次库） */
@@ -25,9 +27,6 @@ const repoRoot = join(here, "..", "..", "..");
 const PROTOCOL_CORE = join(repoRoot, "docs", "prompts", "protocol-core.md");
 const TASK_DOC_TEMPLATE = join(repoRoot, "docs", "prompts", "task-doc.template.md");
 const BASELINE_SCRIPT = join(repoRoot, "docs", "examples", "baseline-strategy.js");
-
-/** 上传失败时对外暴露的阶段名（与任务书 §3 的 stage 字段一一对应） */
-type UploadStage = "auth" | "attempts" | "size" | "zip" | "content" | "static" | "compile" | "fuzz" | "smoke";
 
 export interface ExternalRouteDeps {
   store: Store;
@@ -64,6 +63,9 @@ export function registerExternalRoutes(app: FastifyInstance, deps: ExternalRoute
     (_req, body, done) => done(null, body),
   );
 
+  // ---------------- 练习通道（不消耗正式提交、不计分、只打标尺） ----------------
+  registerPracticeRoute(app, { store, config, registry });
+
   // ---------------- 任务书 ----------------
   // 任务书**不绑定地图**：赛图由组织者在开赛时从注册表里选（内置 + 自定义），
   // 而任务书只给"通用地图规范"（尺寸范围、元素与字符表、MAP 结构、资源点语义）。
@@ -80,7 +82,7 @@ export function registerExternalRoutes(app: FastifyInstance, deps: ExternalRoute
       taskDocTemplatePath: TASK_DOC_TEMPLATE,
       baselineScript: readFileSync(BASELINE_SCRIPT, "utf8"),
       serverBaseUrl: baseUrl,
-      limits: DEFAULT_UPLOAD_LIMITS_PUBLIC,
+      limits: publicLimits(),
       gamesPerPair: 2,
       turnBudgetMs: 50,
     });
@@ -94,6 +96,13 @@ export function registerExternalRoutes(app: FastifyInstance, deps: ExternalRoute
 
   // 对外地址：配了 AI_GAME_PUBLIC_URL 就一律用它（组织者自己可能走隧道/内网，但外部 Agent 得拿到它够得着的地址），
   // 否则按请求头推断（反代场景认 X-Forwarded-Proto/Host）
+  /** 对外公布的限额：把部署时用环境变量调过的"版本上限 / 练习配额"如实告诉 Agent */
+  const publicLimits = (): typeof DEFAULT_UPLOAD_LIMITS_PUBLIC => ({
+    ...DEFAULT_UPLOAD_LIMITS_PUBLIC,
+    maxRevisions: config.maxRevisions,
+    practiceRuns: config.practiceRuns,
+  });
+
   const baseUrlOf = (req: FastifyRequest): string => {
     if (config.publicUrl) return config.publicUrl;
     const proto = (req.headers["x-forwarded-proto"] as string) ?? "http";
@@ -130,10 +139,13 @@ export function registerExternalRoutes(app: FastifyInstance, deps: ExternalRoute
       keyHash: hashAgentKey(key, config.masterKey),
       keyMasked: maskAgentKey(key),
       maxAttempts: DEFAULT_UPLOAD_LIMITS_PUBLIC.maxUploadAttempts,
+      maxPracticeRuns: config.practiceRuns,
     });
     const base = baseUrlOf(req);
     const taskDocUrl = `${base}/api/task-doc`;
     const uploadUrl = `${base}/api/upload`;
+    const practiceUrl = `${base}/api/practice`;
+    const limits = publicLimits();
     return {
       agent,
       key, // 仅此一次返回明文；库里只存哈希
@@ -141,12 +153,13 @@ export function registerExternalRoutes(app: FastifyInstance, deps: ExternalRoute
       // 任务书与地图无关（赛图开赛时才定），给的是一条固定 URL，读到的就是最新版
       taskDocUrl,
       uploadUrl,
-      limits: DEFAULT_UPLOAD_LIMITS_PUBLIC,
-      // 组织者可以直接把这段 prompt 粘给目标 Agent：任务描述 + 任务书地址 + 密钥 + 上传命令
+      practiceUrl,
+      limits,
+      // 组织者可以直接把这段 prompt 粘给目标 Agent：任务描述 + 任务书地址 + 密钥 + 自测/上传命令
       prompt: renderAgentPrompt({
-        taskDocUrl, uploadUrl, key,
+        taskDocUrl, uploadUrl, practiceUrl, practiceQuota: limits.practiceRuns, key,
         agentName: agent.agentName, modelName: agent.modelName,
-        limits: DEFAULT_UPLOAD_LIMITS_PUBLIC,
+        limits,
       }),
     };
   });
@@ -163,15 +176,19 @@ export function registerExternalRoutes(app: FastifyInstance, deps: ExternalRoute
     const base = baseUrlOf(req);
     const taskDocUrl = `${base}/api/task-doc`;
     const uploadUrl = `${base}/api/upload`;
+    const practiceUrl = `${base}/api/practice`;
+    const limits = publicLimits();
     return {
       agent,
       key,
       taskDocUrl,
       uploadUrl,
+      practiceUrl,
+      limits,
       prompt: renderAgentPrompt({
-        taskDocUrl, uploadUrl, key,
+        taskDocUrl, uploadUrl, practiceUrl, practiceQuota: limits.practiceRuns, key,
         agentName: agent.agentName, modelName: agent.modelName,
-        limits: DEFAULT_UPLOAD_LIMITS_PUBLIC,
+        limits,
       }),
     };
   });
@@ -202,6 +219,10 @@ export function registerExternalRoutes(app: FastifyInstance, deps: ExternalRoute
     }
     if (agent.attempts >= agent.maxAttempts) {
       uploadFail(reply, 429, "attempts", `尝试次数已用尽（${agent.attempts}/${agent.maxAttempts}）`);
+      return reply;
+    }
+    if (agent.revision >= config.maxRevisions) {
+      uploadFail(reply, 409, "revisions", `版本数已达上限（${agent.revision}/${config.maxRevisions}）：本 Agent 不能再提交新版本（AI_GAME_MAX_REVISIONS 可调）`);
       return reply;
     }
     (req as UploadRequest).uploadAgent = agent;
@@ -291,6 +312,7 @@ export function registerExternalRoutes(app: FastifyInstance, deps: ExternalRoute
     return {
       ok: true,
       agent: updated,
+      revision: updated?.revision ?? 1,
       scriptSha256,
       scriptLines: scriptOk.split(/\r?\n/).length,
       avgDecisionMs,
@@ -510,16 +532,6 @@ function uploadFail(
   return undefined;
 }
 
-function mapCheckStatusToStage(status: string): UploadStage {
-  switch (status) {
-    case "STATIC_REJECT": return "static";
-    case "COMPILE_ERROR":
-    case "INIT_ERROR": return "compile";
-    case "SMOKE_FAILED": return "smoke";
-    case "EXTRACT_FAILED": return "content";
-    default: return "fuzz";
-  }
-}
-
 export { TASK_DOC_VERSION };
+export type { UploadStage };
 export type { ZipRejectReason };

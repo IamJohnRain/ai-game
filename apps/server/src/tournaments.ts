@@ -20,6 +20,13 @@ export interface TournamentRunOptions {
   mapId: string;
   rules: Ruleset;
   scriptProtocolVersion: string;
+  /**
+   * 显式指定参赛脚本（批次快照 / 标尺对手都用它）。
+   * 给定时不再"读当前脚本"，这样批次进行中有人重新上传也不会改变本批次的参赛版本。
+   */
+  scripts?: Record<string, { script: string; scriptHash: string; revision?: number }>;
+  /** 追加的非入库参赛者（标尺：idle / baseline），不参与"重新签发/上传"那套流程 */
+  calibrators?: { id: string; agentName: string; modelName: string; script: string }[];
 }
 
 export class TournamentRunner extends EventEmitter {
@@ -39,17 +46,30 @@ export class TournamentRunner extends EventEmitter {
     const { store } = this.deps;
     const startedAt = new Date().toISOString();
     try {
-      // 1) 取出参赛脚本（必须是已上传并通过校验的 Agent）
+      // 1) 取出参赛脚本（必须是已上传并通过校验的 Agent；批次快照会给显式 scripts）
       const agents: TournamentAgent[] = [];
       for (const id of this.opts.agentIds) {
         const agent = store.getAgent(id);
         if (!agent) throw new Error(`Agent ${id} 不存在`);
-        if (agent.status !== "uploaded") throw new Error(`Agent ${agent.agentName} 状态为 ${agent.status}，只有已通过校验的 Agent 可以参赛`);
-        const script = store.agentScript(id);
-        if (!script) throw new Error(`Agent ${agent.agentName} 没有可用脚本`);
+        const snapshot = this.opts.scripts?.[id];
+        if (!snapshot && agent.status !== "uploaded") {
+          throw new Error(`Agent ${agent.agentName} 状态为 ${agent.status}，只有已通过校验的 Agent 可以参赛`);
+        }
+        const script = snapshot ?? (() => {
+          const cur = store.agentScript(id);
+          if (!cur) throw new Error(`Agent ${agent.agentName} 没有可用脚本`);
+          return { script: cur.script, scriptHash: cur.scriptSha256 };
+        })();
         agents.push({
           id, agentName: agent.agentName, modelName: agent.modelName,
-          script: script.script, scriptHash: script.scriptSha256,
+          script: script.script, scriptHash: script.scriptHash,
+        });
+      }
+      // 标尺对手（idle / baseline）：入库的是"标尺"而不是真实参赛者，成绩里单列
+      for (const cal of this.opts.calibrators ?? []) {
+        agents.push({
+          id: cal.id, agentName: cal.agentName, modelName: cal.modelName,
+          script: cal.script, scriptHash: `calibration:${cal.id}`,
         });
       }
       if (agents.length < 2) throw new Error("至少需要 2 个已通过校验的 Agent");
@@ -127,14 +147,18 @@ export class TournamentRunner extends EventEmitter {
     const seats: StoredSeat[] = pairAgents.map((pa) => {
       const stats = result.stats[pa.seat]!;
       const agent = this.deps.store.getAgent(pa.id);
-      const stored = this.deps.store.agentScript(pa.id);
+      const snapshot = this.opts.scripts?.[pa.id];
+      const stored = snapshot ? null : this.deps.store.agentScript(pa.id);
+      const revision = snapshot?.revision ?? this.deps.store.getAgent(pa.id)?.revision;
       return {
         seat: pa.seat,
         name: pa.agentName,
-        modelId: agent?.modelName ?? "unknown",
+        // 标尺对手的 modelName 固定为 "calibration"，榜上不会被误当成参赛模型
+        modelId: agent?.modelName ?? (pa.id.startsWith("cal-") ? "calibration" : "unknown"),
         agentId: pa.id,
-        scriptHash: stats.scriptHash || stored?.scriptSha256 || "",
-        ...(stored?.script ? { script: stored.script } : {}),
+        scriptHash: stats.scriptHash || snapshot?.scriptHash || stored?.scriptSha256 || "",
+        ...((snapshot?.script ?? stored?.script) ? { script: (snapshot?.script ?? stored?.script)! } : {}),
+        ...(revision != null ? { revision } : {}),
         validation: agent?.validation ?? [{ stage: "upload", ok: true, detail: "已通过上传校验" }],
       };
     });

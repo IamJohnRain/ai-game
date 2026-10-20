@@ -1,0 +1,170 @@
+{
+  "mapId": "eval-camp-15",
+  "version": 1,
+  "width": 15,
+  "height": 15,
+  "hint": "15×15 蹲守陷阱图：提交点就贴在出生点旁边（2 步），而所有资源点都是高危的 kind=center——把「蹲家刷分」与「外出搬运」的收益权衡放到最大。",
+  "symmetry": "水平镜像 + 垂直镜像（中央行/列自对称）=> 四角出生点等价；1v1 取西北 ↔ 东南对角",
+  "legend": {
+    ".": "平地 plain",
+    "#": "墙 wall（阻挡移动，阻挡视线）",
+    "~": "水 water（阻挡移动，不阻挡视线）",
+    "f": "森林 forest（可通行，阻挡视线，受击减伤且远处不可见）",
+    "S": "出生点 spawn",
+    "A": "弹药补给点 ammoDepot",
+    "G": "加油点 fuelStation",
+    "R": "资源点 resourceNode",
+    "D": "资源提交点 depositPoint"
+  },
+  "grid": [
+    "...............",
+    ".#.....f.....#.",
+    ".AS.D.....D.SA.",
+    ".#..#.fRf.#..#.",
+    ".G....#.#....G.",
+    ".f..#.....#..f.",
+    "....f.....f....",
+    ".#.R...R...R.#.",
+    "....f.....f....",
+    ".f..#.....#..f.",
+    ".G....#.#....G.",
+    ".#..#.fRf.#..#.",
+    ".AS.D.....D.SA.",
+    ".#.....f.....#.",
+    "..............."
+  ],
+  "gridNote": "考察点：蹲守 vs 搬运。① 提交点 (4,2) 距出生点 (2,2) 只有 2 步，交资源几乎零风险，双方都能「蹲家」；② 所有资源点都是 kind=center（没有安全的 home 资源）：中心 (7,7) 是容量 12 的大金矿，另有 (3,7)(11,7)(7,3)(7,11) 四个容量 8 的次级点，最近的一个离出生点也有 6 步，全都在开阔地上、没有森林掩护；③ 结论：想赢就必须离开家门口进中圈，谁先把中圈的产出搬回家谁领先——蹲家只能守分，不能得分。",
+  "spawns": [
+    {
+      "x": 2,
+      "y": 2
+    },
+    {
+      "x": 12,
+      "y": 2
+    },
+    {
+      "x": 2,
+      "y": 12
+    },
+    {
+      "x": 12,
+      "y": 12
+    }
+  ],
+  "spawnsFor1v1": [
+    1,
+    4
+  ],
+  "ammoDepots": [
+    {
+      "x": 1,
+      "y": 2
+    },
+    {
+      "x": 13,
+      "y": 2
+    },
+    {
+      "x": 1,
+      "y": 12
+    },
+    {
+      "x": 13,
+      "y": 12
+    }
+  ],
+  "fuelStations": [
+    {
+      "x": 1,
+      "y": 4
+    },
+    {
+      "x": 13,
+      "y": 4
+    },
+    {
+      "x": 1,
+      "y": 10
+    },
+    {
+      "x": 13,
+      "y": 10
+    }
+  ],
+  "resourceNodes": [
+    {
+      "id": "R1",
+      "x": 7,
+      "y": 3,
+      "kind": "center",
+      "capacity": 8,
+      "initial": 8,
+      "regenEveryRounds": 6
+    },
+    {
+      "id": "R2",
+      "x": 7,
+      "y": 11,
+      "kind": "center",
+      "capacity": 8,
+      "initial": 8,
+      "regenEveryRounds": 6
+    },
+    {
+      "id": "R3",
+      "x": 3,
+      "y": 7,
+      "kind": "center",
+      "capacity": 8,
+      "initial": 8,
+      "regenEveryRounds": 6
+    },
+    {
+      "id": "R4",
+      "x": 11,
+      "y": 7,
+      "kind": "center",
+      "capacity": 8,
+      "initial": 8,
+      "regenEveryRounds": 6
+    },
+    {
+      "id": "R5",
+      "x": 7,
+      "y": 7,
+      "kind": "center",
+      "capacity": 12,
+      "initial": 12,
+      "regenEveryRounds": 8
+    }
+  ],
+  "depositPoints": [
+    {
+      "x": 4,
+      "y": 2
+    },
+    {
+      "x": 10,
+      "y": 2
+    },
+    {
+      "x": 4,
+      "y": 12
+    },
+    {
+      "x": 10,
+      "y": 12
+    }
+  ],
+  "distanceReference_P1": {
+    "note": "以 1 号出生点 (2,2) 为起点、4 邻域最短步数（A* 实测，与 verify-map 的玩法审计同口径）；地图水平+垂直镜像，四个出生点等价。",
+    "spawn_to_ammoDepot": 1,
+    "spawn_to_fuelStation": 3,
+    "spawn_to_homeResourceNode": 6,
+    "spawn_to_centerResourceNode": 6,
+    "spawn_to_deposit": 2,
+    "spawn_to_oppositeSpawn": 10,
+    "centerResourceNode_to_deposit": 4
+  }
+}

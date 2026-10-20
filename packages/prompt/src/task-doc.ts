@@ -14,7 +14,7 @@ import {
 import { rulesetToMarkdownTable } from "./rules-table.ts";
 import { formatBytes } from "./format.ts";
 
-export const TASK_DOC_VERSION = "v1.1";
+export const TASK_DOC_VERSION = "v1.2";
 
 /** 脚本协议版本：协议正文（task-doc §5）任何影响脚本行为的改动都必须升这个号 */
 export const SCRIPT_PROTOCOL_VERSION = "p1.0";
@@ -26,6 +26,10 @@ export interface UploadLimitsPublic {
   maxRatio: number;
   maxScriptLines: number;
   maxUploadAttempts: number;
+  /** 每个 Agent 允许提交的脚本版本数上限（每版一把一次性密钥） */
+  maxRevisions: number;
+  /** 练习通道配额（不消耗正式提交） */
+  practiceRuns: number;
 }
 
 export const DEFAULT_UPLOAD_LIMITS_PUBLIC: UploadLimitsPublic = {
@@ -35,6 +39,8 @@ export const DEFAULT_UPLOAD_LIMITS_PUBLIC: UploadLimitsPublic = {
   maxRatio: 200,
   maxScriptLines: 600,
   maxUploadAttempts: 10,
+  maxRevisions: 3,
+  practiceRuns: 5,
 };
 
 export interface TaskDocOptions {
@@ -61,8 +67,10 @@ export interface RenderedTaskDoc {
     upload: string;
     taskDoc: string;
     tournaments: string;
-    /** 哪些端点要登录：外部 Agent 只需要免登录的 taskDoc 与 upload */
-    requiresLogin: { register: boolean; upload: boolean; taskDoc: boolean; tournaments: boolean };
+    /** 练习通道：自测用，不消耗正式提交（docs/08 §6） */
+    practice: string;
+    /** 哪些端点要登录：外部 Agent 只需要免登录的 taskDoc / upload / practice */
+    requiresLogin: { register: boolean; upload: boolean; taskDoc: boolean; tournaments: boolean; practice: boolean };
   };
 }
 
@@ -120,8 +128,9 @@ export function renderTaskDoc(opts: TaskDocOptions): RenderedTaskDoc {
     upload: `${base}/api/upload`,
     taskDoc: `${base}/api/task-doc`,
     tournaments: `${base}/api/tournaments`,
-    // 除任务书与上传外，界面与接口都要登录（单账号）；外部 Agent 用不到带会话的那几个
-    requiresLogin: { register: true, upload: false, taskDoc: false, tournaments: true },
+    practice: `${base}/api/practice`,
+    // 除任务书、上传、练习外，界面与接口都要登录（单账号）；外部 Agent 用不到带会话的那几个
+    requiresLogin: { register: true, upload: false, taskDoc: false, tournaments: true, practice: false },
   };
 
   // ctx 与真实比赛里 onInit(ctx) 拿到的对象同构（字段名来自 protocol 的 Ctx），只是换成"第一人称示例"：
@@ -158,6 +167,7 @@ export function renderTaskDoc(opts: TaskDocOptions): RenderedTaskDoc {
     REGISTER_URL: endpoints.register,
     UPLOAD_URL: endpoints.upload,
     TASK_DOC_URL: endpoints.taskDoc,
+    PRACTICE_URL: endpoints.practice,
     ZIP_MAX: formatBytes(limits.zipMaxBytes),
     MAX_ENTRIES: String(limits.maxEntries),
     MAX_ENTRY_UNCOMPRESSED: formatBytes(256 * 1024),
@@ -165,6 +175,8 @@ export function renderTaskDoc(opts: TaskDocOptions): RenderedTaskDoc {
     MAX_RATIO: String(limits.maxRatio),
     MAX_LINES: String(opts.maxLines ?? limits.maxScriptLines),
     MAX_UPLOAD_ATTEMPTS: String(limits.maxUploadAttempts),
+    MAX_REVISIONS: String(limits.maxRevisions),
+    PRACTICE_QUOTA: String(limits.practiceRuns),
     TURN_BUDGET: String(opts.turnBudgetMs ?? 50),
     GAMES_PER_PAIR: String(opts.gamesPerPair ?? 2),
   };

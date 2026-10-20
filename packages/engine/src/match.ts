@@ -34,7 +34,7 @@ interface Tank {
   kills: number; deaths: number; deposits: number; unitsDeposited: number; unitsCollected: number;
   ammoLoaded: number; fuelLoaded: number; emergencyMoves: number;
   invalidActions: number; strikes: number; disqualified: boolean; disqualifiedKind?: string;
-  turnsTaken: number; decisionMs: number;
+  turnsTaken: number; decisionMs: number; maxDecisionMs: number;
   breakdown: ScoreBreakdown;
 }
 
@@ -63,7 +63,7 @@ export function runMatch(input: RunMatchInput): MatchResult {
       kills: 0, deaths: 0, deposits: 0, unitsDeposited: 0, unitsCollected: 0,
       ammoLoaded: 0, fuelLoaded: 0, emergencyMoves: 0,
       invalidActions: 0, strikes: 0, disqualified: false,
-      turnsTaken: 0, decisionMs: 0, breakdown: emptyBreakdown(),
+      turnsTaken: 0, decisionMs: 0, maxDecisionMs: 0, breakdown: emptyBreakdown(),
     });
   }
   const seatList = input.seats.map((s) => s.seat).sort((a, b) => a - b);
@@ -173,7 +173,9 @@ export function runMatch(input: RunMatchInput): MatchResult {
       } catch (err) {
         result = { actions: null, kind: "exception", error: errText(err) };
       }
-      tank.decisionMs += nowMs() - t0;
+      const spent = nowMs() - t0;
+      tank.decisionMs += spent;
+      if (spent > tank.maxDecisionMs) tank.maxDecisionMs = spent;
       tank.turnsTaken += 1;
 
       // 控制器返回值完全不可信：异常/超时 → strike；非数组 → strike + BAD_SHAPE
@@ -485,6 +487,7 @@ export function runMatch(input: RunMatchInput): MatchResult {
         ammoLoaded: t.ammoLoaded, fuelLoaded: t.fuelLoaded, emergencyMoves: t.emergencyMoves,
         invalidActions: t.invalidActions, strikes: t.strikes, disqualified: t.disqualified,
         avgDecisionMs: t.turnsTaken > 0 ? Math.round((t.decisionMs / t.turnsTaken) * 1000) / 1000 : 0,
+        maxDecisionMs: Math.round(t.maxDecisionMs * 1000) / 1000,
         scoreBreakdown: { ...t.breakdown },
         ...(t.disqualifiedKind ? { disqualifiedKind: t.disqualifiedKind } : {}),
       } satisfies PlayerStats;

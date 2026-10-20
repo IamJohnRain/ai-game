@@ -1,0 +1,206 @@
+{
+  "mapId": "eval-fortress-24",
+  "version": 1,
+  "width": 24,
+  "height": 24,
+  "hint": "24×24 森林要塞：约一半格子是森林，墙只有十几格；出生点贴着林缘，资源点全藏在林中——进林即失去视野，考的是敢不敢摸黑打。",
+  "symmetry": "水平镜像 + 垂直镜像 => 四角出生点等价；1v1 取西北 ↔ 东南对角",
+  "legend": {
+    ".": "平地 plain",
+    "#": "墙 wall（阻挡移动，阻挡视线）",
+    "~": "水 water（阻挡移动，不阻挡视线）",
+    "f": "森林 forest（可通行，阻挡视线，受击减伤且远处不可见）",
+    "S": "出生点 spawn",
+    "A": "弹药补给点 ammoDepot",
+    "G": "加油点 fuelStation",
+    "R": "资源点 resourceNode",
+    "D": "资源提交点 depositPoint"
+  },
+  "grid": [
+    "~~....................~~",
+    "~~...D............D...~~",
+    "........................",
+    ".fSffffffffffffffffffSf.",
+    "...ffffff##ff##ffffff...",
+    ".G.ffR..ffffffff..Rff.G.",
+    "..Afff..ffffffff..fffA..",
+    "..#ffffffffffffffffff#..",
+    "..#ffffffffffffffffff#..",
+    "...fff...RffffR...fff...",
+    "...fff...ffffff...fff...",
+    "...ff#ffffffffffff#ff...",
+    "...ff#ffffffffffff#ff...",
+    "...fff...ffffff...fff...",
+    "...fff...RffffR...fff...",
+    "..#ffffffffffffffffff#..",
+    "..#ffffffffffffffffff#..",
+    "..Afff..ffffffff..fffA..",
+    ".G.ffR..ffffffff..Rff.G.",
+    "...ffffff##ff##ffffff...",
+    ".fSffffffffffffffffffSf.",
+    "........................",
+    "~~...D............D...~~",
+    "~~....................~~"
+  ],
+  "gridNote": "考察点：视野受限下的林战。① 主林区是 18×18 的方形要塞（x/y 3..20），森林共 276 格（占全图 48%，远高于 25% 的下限），墙只有 20 格、水 16 格，几乎不构成硬阻挡；② 出生点 (2,3) 紧贴林缘（东边 1 格就是树），林外只有一圈窄走廊；③ 资源点全部在林中：(5,5) 等 4 个 kind=home 在近林，(9,9) 等 4 个 kind=center 在林心，林中有 4 片 2×2~3×2 的空地作为「林地开阔点」；④ 森林挡视线（视野 6、森林隐蔽半径 3），进林后远处不可见，配合 4 片空地形成「明暗交错」的交战区；⑤ 提交点 (5,1)、弹药 (2,6)、加油 (1,5) 都在林外走廊，逼玩家出林交付。",
+  "spawns": [
+    {
+      "x": 2,
+      "y": 3
+    },
+    {
+      "x": 21,
+      "y": 3
+    },
+    {
+      "x": 2,
+      "y": 20
+    },
+    {
+      "x": 21,
+      "y": 20
+    }
+  ],
+  "spawnsFor1v1": [
+    1,
+    4
+  ],
+  "ammoDepots": [
+    {
+      "x": 2,
+      "y": 6
+    },
+    {
+      "x": 21,
+      "y": 6
+    },
+    {
+      "x": 2,
+      "y": 17
+    },
+    {
+      "x": 21,
+      "y": 17
+    }
+  ],
+  "fuelStations": [
+    {
+      "x": 1,
+      "y": 5
+    },
+    {
+      "x": 22,
+      "y": 5
+    },
+    {
+      "x": 1,
+      "y": 18
+    },
+    {
+      "x": 22,
+      "y": 18
+    }
+  ],
+  "resourceNodes": [
+    {
+      "id": "R1",
+      "x": 5,
+      "y": 5,
+      "kind": "home",
+      "capacity": 8,
+      "initial": 8,
+      "regenEveryRounds": 6
+    },
+    {
+      "id": "R2",
+      "x": 18,
+      "y": 5,
+      "kind": "home",
+      "capacity": 8,
+      "initial": 8,
+      "regenEveryRounds": 6
+    },
+    {
+      "id": "R3",
+      "x": 5,
+      "y": 18,
+      "kind": "home",
+      "capacity": 8,
+      "initial": 8,
+      "regenEveryRounds": 6
+    },
+    {
+      "id": "R4",
+      "x": 18,
+      "y": 18,
+      "kind": "home",
+      "capacity": 8,
+      "initial": 8,
+      "regenEveryRounds": 6
+    },
+    {
+      "id": "R5",
+      "x": 9,
+      "y": 9,
+      "kind": "center",
+      "capacity": 10,
+      "initial": 10,
+      "regenEveryRounds": 5
+    },
+    {
+      "id": "R6",
+      "x": 14,
+      "y": 9,
+      "kind": "center",
+      "capacity": 10,
+      "initial": 10,
+      "regenEveryRounds": 5
+    },
+    {
+      "id": "R7",
+      "x": 9,
+      "y": 14,
+      "kind": "center",
+      "capacity": 10,
+      "initial": 10,
+      "regenEveryRounds": 5
+    },
+    {
+      "id": "R8",
+      "x": 14,
+      "y": 14,
+      "kind": "center",
+      "capacity": 10,
+      "initial": 10,
+      "regenEveryRounds": 5
+    }
+  ],
+  "depositPoints": [
+    {
+      "x": 5,
+      "y": 1
+    },
+    {
+      "x": 18,
+      "y": 1
+    },
+    {
+      "x": 5,
+      "y": 22
+    },
+    {
+      "x": 18,
+      "y": 22
+    }
+  ],
+  "distanceReference_P1": {
+    "note": "以 1 号出生点 (2,3) 为起点、4 邻域最短步数（A* 实测，与 verify-map 的玩法审计同口径）；地图水平+垂直镜像，四个出生点等价。",
+    "spawn_to_ammoDepot": 3,
+    "spawn_to_fuelStation": 3,
+    "spawn_to_homeResourceNode": 5,
+    "spawn_to_centerResourceNode": 13,
+    "spawn_to_deposit": 5,
+    "spawn_to_oppositeSpawn": 19,
+    "centerResourceNode_to_deposit": 12
+  }
+}

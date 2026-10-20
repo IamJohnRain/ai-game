@@ -20,12 +20,17 @@
 ② GET  /api/task-doc 读任务书 ◀───────────────  协议正文 + 地图规范 + 数值表 + 上传规范（免登录）
 ③ 自己写 strategy.js（人写/模型写都行）
 ④ pnpm cli check  本地自检（与上传闸门同一套流水线）
+④' POST /api/practice 自测 ──────────────────▶  完整准入 + 两局标尺对局
+                                                 不消耗密钥、不计分（配额 5 次）——先测再交卷
 ⑤ pnpm cli pack   打成 zip
 ⑥ POST /api/upload 带密钥上传 ───────────────▶  **先验密钥再收文件**：密钥不存在/已用过/次数用尽
                                                  一律在读 body 之前拒绝；通过才走 体积 → 结构 → 合法性
-                                                 通过即入库，密钥作废（一次性）
+                                                 通过即入库，密钥作废（一次性；每版一把）
+   （每版一把密钥：重新签发后可再交一版，默认上限 3 版）
 ⑦ 组织者登录后发起赛事 ──────────────────────▶  单循环 1v1，每对 2 局互换座位
    POST /api/tournaments（需登录）
+⑦' 组织者发起评测批次（v1.2）────────────────▶  多条 leg（多种子/多图/短局长局/规则变体）
+   POST /api/cohorts（需登录）                    + 标尺对手 → 评级±CI、胜负矩阵、过程分画像
 ⑧ 网页看：实时观战 / 回放 / 战报 / 排行榜 ◀────  每局都有事件流、积分明细与复现键（需登录）
 ```
 
@@ -278,7 +283,8 @@ function onTurn(state) {
 | 页面 | 能干什么 |
 | --- | --- |
 | **登录页**（`/login`，免登录） | 唯一账号登录（用户名固定 `JohnRyan`，密码见配置）；其余页面与接口都要先过这一关 |
-| **Agent 自助接入** | 注册 Agent（自动签发一次性密钥 + **可一键复制的启动 prompt**）、查看已注册列表与脚本哈希、重新签发密钥、删除、任务文档与上传规范一览 |
+| **Agent 自助接入** | 注册 Agent（自动签发一次性密钥 + **可一键复制的启动 prompt**）、查看已注册列表与版本/自测次数、重新签发密钥、删除、任务文档与上传规范一览 |
+| **评测批次**（v1.2） | 发起/查看评测批次：leg 计划与进度、评级（±95% CI）、胜负矩阵、过程分画像、Markdown 战报 |
 | **赛事** | 勾选 Agent → 选地图（内置或自定义）→ 发起 1v1 循环赛；看进度、积分榜、每局的回放/战报/观战入口 |
 | **实时观战** | 正在跑的对局：时间轴、上帝视角与单座位迷雾视角、逐条事件日志、双方面板（HP/弹药/燃油/载货/比分） |
 | **回放** | 任意已结束对局的事件流回放（不存视频，前端用事件流重建画面；支持 1x~极速与逐事件步进） |
@@ -342,7 +348,7 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8787/login  # 服务�
 - **日志老化三层**（互不依赖应用自身，细节与参数见 [docs/07](docs/07-部署.md)）：
   logrotate 每天一轮（单文件 > 20 MB 即切、保留 14 份并压缩）→ crontab 每 15 分钟兜底（单文件 > 40 MB 立即切、
   删 14 天前归档、logs 目录硬上限 200 MB）→ 分区水位保护（≥85% 只留最近 3 份；≥92% 清空全部日志）。
-- 可覆盖配置写在 `~/ai-game/.env`（`HOST`/`PORT`/`AI_GAME_AUTH_PASSWORD`/`AI_GAME_SESSION_TTL_MS`/`AI_GAME_TURN_INTERVAL_MS`/`AI_GAME_MAX_CONCURRENT`/`AI_GAME_PUBLIC_URL`/`AI_GAME_MASTER_KEY`）。
+- 可覆盖配置写在 `~/ai-game/.env`（`HOST`/`PORT`/`AI_GAME_AUTH_PASSWORD`/`AI_GAME_SESSION_TTL_MS`/`AI_GAME_TURN_INTERVAL_MS`/`AI_GAME_MAX_CONCURRENT`/`AI_GAME_MAX_CONCURRENT_COHORTS`/`AI_GAME_MAX_REVISIONS`/`AI_GAME_PRACTICE_RUNS`/`AI_GAME_PUBLIC_URL`/`AI_GAME_MASTER_KEY`）。
 - 常用运维：`systemctl status|restart ai-game`、`tail -f ~/ai-game/logs/app.log`、`tail ~/ai-game/logs/maintenance.log`。
 - 探活/自检用 `GET /login`（免登录，200 即就绪）——`/api/health` 现在需要登录，别拿它做探针。
 

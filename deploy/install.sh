@@ -44,6 +44,19 @@ log "pnpm build:web"
 pnpm build:web
 [ -f apps/web/dist/index.html ] || die "前端构建失败：apps/web/dist/index.html 不存在"
 
+# 3b) 考察图（docs/08 §5.1）：装进 data/maps 就进入注册表 —— 于是自动进准入校验与赛事图池
+#     已存在的文件不覆盖：组织者可能自己改过（改过就以服务器上的为准）
+if [ -d "$APP_DIR/maps/eval" ]; then
+  mkdir -p "$APP_DIR/data/maps"
+  added=0
+  for f in "$APP_DIR"/maps/eval/*.json; do
+    [ -f "$f" ] || continue
+    base="$(basename "$f")"
+    if [ ! -f "$APP_DIR/data/maps/$base" ]; then cp "$f" "$APP_DIR/data/maps/$base"; added=$((added + 1)); fi
+  done
+  log "考察图：新增 $added 张（共 $APP_DIR/data/maps 下 $(ls -1 "$APP_DIR/data/maps" 2>/dev/null | wc -l) 张自定义/考察图）"
+fi
+
 # 4) 可选覆盖配置（首次安装生成，之后不动）
 #    登录密码**不在仓库里**：安装时随机生成一个写进 .env，之后想改就编辑该文件再重启
 if [ ! -f "$APP_DIR/.env" ]; then
@@ -67,6 +80,10 @@ AI_GAME_AUTH_PASSWORD=__GENERATED_PASSWORD__
 # 组织者自己走 SSH 隧道或内网访问时，把这里填成"外部 Agent 真正能访问到的那个地址"，
 # 否则 prompt 里会带上 127.0.0.1 这种只有你本机才通行的地址。
 # AI_GAME_PUBLIC_URL=https://your-domain.com
+# 评测批次（docs/08）：并发批次上限 / 每个 Agent 的版本数上限 / 练习通道配额
+# AI_GAME_MAX_CONCURRENT_COHORTS=1
+# AI_GAME_MAX_REVISIONS=3
+# AI_GAME_PRACTICE_RUNS=5
 ENVEOF
   AUTH_PASS="$("$NODE_BIN" -e 'console.log(require("node:crypto").randomBytes(18).toString("base64url"))')"
   # 生成的是 base64url（A-Za-z0-9-_），放进 sed 替换里没有转义问题

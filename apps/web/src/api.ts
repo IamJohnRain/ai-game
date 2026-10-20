@@ -131,6 +131,13 @@ export type Agent = {
   zipBytes?: number;
   validation?: AgentValidationStep[];
   rejectReason?: string;
+  /** 已提交的脚本版本数（0 = 还没交过） */
+  revision: number;
+  /** 成功那次上传前失败过几次（0 = 一次过） */
+  attemptsAtUpload: number;
+  /** 练习通道：已用次数 / 配额（练习不消耗正式提交、不计分） */
+  practiceRuns: number;
+  maxPracticeRuns: number;
 };
 
 export type UploadLimits = {
@@ -140,6 +147,10 @@ export type UploadLimits = {
   maxRatio: number;
   maxScriptLines: number;
   maxUploadAttempts: number;
+  /** 每个 Agent 允许提交的版本数上限 */
+  maxRevisions: number;
+  /** 练习通道配额 */
+  practiceRuns: number;
 };
 
 export type AgentRegisterInput = {
@@ -159,13 +170,16 @@ export type AgentRegisterResult = {
   taskDocUrl: string;
   uploadUrl: string;
   limits: UploadLimits;
-  /** 可直接粘给目标 Agent 的启动提示：任务描述 + 任务书地址 + 密钥 + 上传命令 */
+  /** 练习通道地址（自测用，不消耗正式提交） */
+  practiceUrl: string;
+  /** 可直接粘给目标 Agent 的启动提示：任务描述 + 任务书地址 + 密钥 + 自测/上传命令 */
   prompt: string;
 };
 
 export type AgentReissueResult = {
   agent: Agent;
   key: string;
+  practiceUrl?: string;
   taskDocUrl: string;
   uploadUrl: string;
   /** 新密钥对应的启动提示（旧 prompt 里的密钥已作废，别再用） */
@@ -179,6 +193,98 @@ export type TaskDocJson = {
   endpoints: { register: string; upload: string; taskDoc: string; tournaments: string };
   limits: UploadLimits;
 };
+
+
+// ---------------- 评测批次（docs/08） ----------------
+
+export type CohortStatus = "pending" | "running" | "finished" | "finished_with_errors" | "failed" | "stopped";
+
+export type CohortSummary = {
+  id: string;
+  name: string;
+  status: CohortStatus;
+  agentCount: number;
+  legs: number;
+  finishedLegs?: number;
+  gamesPerPair: number;
+  createdAt: string;
+  finishedAt?: string;
+  error?: string;
+};
+
+export type CohortLegRow = {
+  index: number;
+  name: string;
+  mapId: string;
+  maxRounds: number;
+  rulesVariant: string;
+  status: string;
+  tournamentId?: string;
+  error?: string;
+};
+
+export type CohortRatingRow = {
+  agentId: string;
+  agentName: string;
+  modelName: string;
+  calibration: boolean;
+  rating: number;
+  lo: number;
+  hi: number;
+  games: number;
+  wins: number;
+  draws: number;
+  losses: number;
+  scoreDiff: number;
+  avgScore: number;
+  insufficient: boolean;
+};
+
+export type CohortMatrixCell = { aId: string; bId: string; wins: number; draws: number; losses: number; medianDiff: number; games: number };
+
+export type CohortMetricRow = {
+  agentId: string;
+  agentName: string;
+  modelId: string;
+  calibration: boolean;
+  matches: number;
+  invalidRate: number;
+  apUtilization: number;
+  emergencyRate: number;
+  unitsPer100: number;
+  endgameShare: number;
+  supplyShare: number;
+  killDeathDiff: number;
+  strikes: number;
+  disqualifiedRate: number;
+  avgDecisionMs: number;
+  maxDecisionMs: number;
+  adaptivity: number;
+  avgScore: number;
+};
+
+export type CohortDetail = {
+  cohort: { id: string; name: string; status: CohortStatus; masterSeed: number; gamesPerPair: number; agentCount: number; createdAt: string; finishedAt?: string; error?: string };
+  legs: CohortLegRow[];
+  progress?: { leg: number; totalLegs: number };
+  snapshot: { agentId: string; agentName: string; modelName: string; revision: number; scriptSha256: string; calibration?: boolean; resolvedBy?: string }[];
+  ratings: { rows: CohortRatingRow[]; games: number; bootstrapRounds: number } | null;
+  matrix: CohortMatrixCell[] | null;
+  metrics: { rows: CohortMetricRow[]; games: number } | null;
+};
+
+export type CreateCohortInput = {
+  agentIds: string[];
+  name?: string;
+  masterSeed?: number;
+  gamesPerPair?: number;
+  includeCalibration?: boolean;
+  revisionPolicy?: "latest" | "best" | "pinned";
+  revisions?: Record<string, number>;
+  legs?: { name?: string; mapId: string; maxRounds: number; rulesVariant?: string; seeds?: number }[];
+};
+
+export type CreateCohortResult = { cohortId: string; legs: number; totalMatches: number; participants: number };
 
 // ---------------- 赛事（1v1 循环赛） ----------------
 
@@ -401,6 +507,13 @@ export const api = {
   deleteAgent: (id: string) => request<{ ok: true }>("DELETE", `/agents/${encodeURIComponent(id)}`),
   getTaskDoc: () => requestText("/task-doc"),
   getTaskDocJson: () => request<TaskDocJson>("GET", "/task-doc?format=json"),
+
+  // —— 评测批次（docs/08）：多条 leg + 标尺对手 + 评级/矩阵/画像
+  listCohorts: () => request<{ cohorts: CohortSummary[] }>("GET", "/cohorts"),
+  getCohort: (id: string) => request<CohortDetail>("GET", `/cohorts/${encodeURIComponent(id)}`),
+  createCohort: (input: CreateCohortInput) => request<CreateCohortResult>("POST", "/cohorts", input),
+  stopCohort: (id: string) => request<{ ok: true; note: string }>("POST", `/cohorts/${encodeURIComponent(id)}/stop`),
+  getCohortReport: (id: string) => requestText(`/cohorts/${encodeURIComponent(id)}/report`),
 
   // —— 赛事（1v1 循环赛）
   listTournaments: () => request<{ tournaments: TournamentSummary[] }>("GET", "/tournaments"),

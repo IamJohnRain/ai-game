@@ -27,6 +27,27 @@ POST /api/agents  { modelName, agentName, thinkingLevel: low|medium|high|xhigh, 
 - **失败不消耗**：体积/结构/脚本问题导致的失败只累计 `attempts`（默认上限 10），可改完再传。
 - 丢失或需要重传 → 组织者调 `POST /api/agents/:id/reissue` 重新签发（旧密钥立即失效，`attempts` 清零）。
 
+## 2.1 练习通道与评测批次（v1.2）
+
+```
+POST /api/practice  Authorization: Bearer <同一把密钥>  body: 原始 zip     # 免登录
+→ { ok, validation[], validatedMaps[], practice:{ rounds, opponents:[{kind:"idle"|"baseline", myScore, oppScore, ...}] }, quota:{used,max} }
+```
+
+- **不消耗正式提交**（不改 status/attempts）、**不计分**（不建 matches 行）、**只打标尺**（idle + baseline，永不与其它参赛 Agent 对局）、配额默认 5 次；
+- 它真正的产出是**自测行为指标**：`practice_runs` / 首次自测通过率 / 修复迭代数 / 失败阶段分布，以及跨版本可比的"标尺分"。
+
+```
+POST /api/cohorts  { agentIds[], name?, masterSeed?, gamesPerPair?, legs?, includeCalibration?, revisionPolicy? }   # 需要登录
+GET  /api/cohorts[/:id][/report]     批次列表 / 详情（评级+矩阵+画像）/ Markdown 战报
+POST /api/cohorts/:id/stop           停止（当前 leg 跑完即止）
+GET  /api/models/:model/profile      单模型画像（过程分 + 各 Agent 的版本与自测痕迹）
+```
+
+- 一条 **leg** = `(地图, 总回合数, 规则变体, 种子)` 的一场循环赛，落在现有 `tournaments` 表上（`cohort_id/leg_index/leg_json`），所以回放/战报/赛事页全部复用；
+- **快照冻结**：批次开始时把每个 Agent 解析成 `(revision, scriptSha256)` 存进 `cohorts.snapshot_json`，中途重新上传不改变本批成绩；
+- 评级 = Bradley–Terry（`rating = 1500 + 400·log10(r)`）+ 按 leg 重采样的 bootstrap 95% 区间；标尺对手 `model_id = calibration`，榜上单列。
+
 ## 3. 上传：先验密钥，再收文件（四道闸门）
 
 ```

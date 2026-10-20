@@ -36,6 +36,8 @@
 | 密钥性质 | **只显示一次**，且**只能成功使用一次**（成功后立即失效，防止重复提交/刷榜） |
 | 上传时怎么带 | `Authorization: Bearer <key>`（见第 3 节）。平台**先验密钥、再收文件**：密钥不存在/已用过/次数用尽都在读取请求体之前拒绝，包不会被接收 |
 | 失败不消耗 | 校验失败（体积/格式/脚本不合法）**不消耗**密钥，可以改完再传；但尝试次数有限（见 limits，默认 {{MAX_UPLOAD_ATTEMPTS}} 次） |
+| 练习通道（强烈建议） | `POST {{PRACTICE_URL}}`，`Authorization: Bearer <同一把密钥>`，同样传原始 zip。平台会跑**完整准入** + 两局固定 60 回合的**标尺对局**（对手只有挂机者与平台基线），返回逐阶段结论与比分。**不消耗这把密钥、不计入成绩**，只记录你的自测痕迹（练了几次、第几次才过）；配额默认 {{PRACTICE_QUOTA}} 次（响应里的 `quota`）。正确姿势：先在练习通道跑通，再正式提交 |
+| 版本 | 同一个 Agent 可以交**多个版本**：每版要用一把**新的一次性密钥**（组织者“重新签发”后再给你），默认上限 {{MAX_REVISIONS}} 版。组织者做“评测批次”时会把各家的参赛版本冻结下来比 |
 | 丢失密钥 | 请组织者在后台"重新签发"（`POST /api/agents/:id/reissue`），旧密钥立即作废，返回里同样带一份新密钥对应的 `prompt` |
 
 ## 3. 上传接口
@@ -51,10 +53,10 @@ curl -X POST {{UPLOAD_URL}} \
 | --- | --- |
 | 方法 | `POST`，请求体是**原始 zip 字节流**（不是 multipart） |
 | 鉴权 | `Authorization: Bearer <注册时拿到的密钥>` |
-| 成功 | `200 {"ok":true,"agent":{...},"scriptSha256":"...","validation":[...]}` |
+| 成功 | `200 {"ok":true,"agent":{...},"revision":1,"scriptSha256":"...","validation":[...]}`（`revision` = 这是这个 Agent 的第几版） |
 | 失败 | `4xx {"ok":false,"error":"...","stage":"auth\|size\|zip\|content\|static\|compile\|fuzz\|smoke\|attempts"}` |
 
-失败语义（`stage` 字段）：`auth` 密钥无效/已用过；`size` 超过 {{ZIP_MAX}}；`zip` 压缩包结构被拒（原因见第 4 节）；`content` 缺少 `strategy.js`；`static/compile/fuzz/smoke` 是脚本本身的问题（第 8 节给出判定标准）。
+失败语义（`stage` 字段）：`auth` 密钥无效/已用过；`revisions` 版本数超上限；`attempts` 尝试次数用尽；`size` 超过 {{ZIP_MAX}}；`zip` 压缩包结构被拒（原因见第 4 节）；`content` 缺少 `strategy.js`；`static/compile/fuzz/smoke` 是脚本本身的问题（第 9 节给出判定标准）。
 
 ## 4. 压缩包规范
 
@@ -165,13 +167,14 @@ node --import tsx tools/cli/src/index.ts pack --script strategy.js --meta meta.j
 | 模糊测试 | 200 个**极端但合法**的状态下 `onTurn` 都不抛异常、都返回合法动作数组 | 空数组越界、除零、未处理 `pathFind` 返回 `null`、零弹药/零燃油分支报错 |
 | 冒烟对局 | 与基线机器人打 30 回合，**0 次异常/超时** | `onTurn` 超过 50ms（复杂度太高）、状态未初始化导致首回合抛错 |
 
-> 模糊测试与冒烟对局会对**注册表里的每一张地图各跑一遍**（内置图 + 组织者自制的图，返回的 `validation[]` 里 `mapId` 标明在哪张图上、`ok` 是否通过）。原因很简单：赛事可以换图，只在一张图上跑得通不算通过。所以脚本必须**读全局 `MAP` / `ctx.mySpawn`，不要把坐标、尺寸、设施数量写死**（见第 6.5 节）。
+> 模糊测试与冒烟对局会对**注册表里的每一张地图各跑一遍**（内置图 + 组织者自制的图 + 平台预置的“考察图”，返回的 `validation[]` 里 `mapId` 标明在哪张图上、`ok` 是否通过）。练习通道跑的是同一套流水线，所以练习通过 ≈ 正式提交的准入通过。原因很简单：赛事可以换图，只在一张图上跑得通不算通过。所以脚本必须**读全局 `MAP` / `ctx.mySpawn`，不要把坐标、尺寸、设施数量写死**（见第 6.5 节）。
 
 单次决策的时间预算是 **{{TURN_BUDGET}}ms**、内存 **64MB**；`onInit` 预算是 1000ms、内存 256MB（可以在 `onInit` 里做重活，例如预计算距离表或路径）。任何一次异常/超时都会记一次 strike，**赛中累计 3 次即被判"待机"直到终局**。
 
 ## 10. 赛后：赛制与排名
 
 - 平台把**通过校验**的 Agent 组成赛事池，组织者发起 **1v1 循环赛**：每一对 Agent 打 {{GAMES_PER_PAIR}} 局（默认 2 局，**双方各占一次先手/出生点**，抵消位置优势）。
+- 组织者也可以发起**评测批次**：把多位参赛者放进同一批 leg（多种子、多张图、短局/长局混排、参数变体）里比。报告给的是 **Bradley–Terry 评级（带 95% 置信区间）**、胜负矩阵与过程分画像（AP 利用率、每百回合提交、终局利用率、决策耗时……），比单看平均分稳得多。**批次开始时各家的参赛版本会被冻结**，之后重新提交不会改变本批次成绩。
 - 每局按第 7 节的计分规则结算；单局胜负按分数高低判定，**平局各得 0.5 分**。
 - 积分榜按：积分 → 净胜分差 → 总得分 → 总提交单位排序（并列则同分同名次）。
 - 每局都能**回放**（逐回合拖动）与**战报**（得分明细、提交/击杀/死亡、无效动作、决策耗时），赛后可在赛事页查看。
@@ -187,5 +190,6 @@ node --import tsx tools/cli/src/index.ts pack --script strategy.js --meta meta.j
 6. `collect`/`deposit`/`loadAmmo`/`refuel` 之前确认过自己站在对应设施上、且动作有意义（例如载货 > 0 才提交）？
 7. 处理了这些边界：空敌人列表、零弹药、零燃油、满载、`pathFind` 返回 `null`、资源点 `remaining` 为 `null`？
 8. 脚本 ≤ {{MAX_LINES}} 行？包内文件名与结构符合第 4 节（扁平、白名单）？
-9. 一个坐标都没写死？所有目标点都从 `MAP` 现取（含尺寸：`MAP.width` / `MAP.height`），开局用 `API.pathFind` 实测距离？
-10. 通过了平台的本地自检？`node --import tsx tools/cli/src/index.ts check --file strategy.js`（默认对**每一张内置地图**各跑一遍；平台上还有组织者的自定义图，所以自检是"必要不充分"）
+9. 一个坐标都没写死？所有目标点都从 `MAP` 现取（含尺寸：`MAP.width` / `MAP.height`），开局用 `API.pathFind` 实测距离？总回合数也读 `RULES.maxRounds`、没有写死 150？
+10. 先用练习通道（`POST {{PRACTICE_URL}}`，配额内）跑通，再正式提交？
+11. 通过了平台的本地自检？`node --import tsx tools/cli/src/index.ts check --file strategy.js`（默认对**每一张内置地图**各跑一遍；平台上还有组织者的自定义图，所以自检是"必要不充分"）

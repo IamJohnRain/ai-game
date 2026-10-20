@@ -514,6 +514,17 @@ a {
   margin-bottom: 8px;
 }
 
+/* 可选中的小标签组（例如评测批次里勾选参赛 Agent） */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chips .btn {
+  font-size: 12px;
+}
+
 /* ---------------- 表单 ---------------- */
 
 .field {

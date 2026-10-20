@@ -9,11 +9,13 @@ import { WatchPage } from "./pages/WatchPage";
 import { ReplayPage } from "./pages/ReplayPage";
 import { ReportPage } from "./pages/ReportPage";
 import { LeaderboardPage } from "./pages/LeaderboardPage";
+import { CohortsPage } from "./pages/CohortsPage";
 import { MapEditorPage } from "./pages/MapEditorPage";
 import { Badge, Banner, EmptyState, Section, fmtTime, matchStatusInfo, shortId } from "./ui";
 
 export type Nav =
   | { page: "agents" }
+  | { page: "cohorts"; cohortId: string | null }
   | { page: "tournament"; tournamentId: string | null }
   | { page: "watch"; matchId: string | null }
   | { page: "replay"; matchId: string | null }
@@ -23,6 +25,7 @@ export type Nav =
 
 const NAV_ITEMS: { key: Nav["page"]; label: string }[] = [
   { key: "agents", label: "Agent 自助接入" },
+  { key: "cohorts", label: "评测批次" },
   { key: "tournament", label: "赛事" },
   { key: "watch", label: "实时观战" },
   { key: "replay", label: "回放" },
@@ -76,6 +79,9 @@ export function App() {
       case "board":
       case "editor":
         setNav({ page: target.page });
+        break;
+      case "cohorts":
+        setNav({ page: "cohorts", cohortId: null });
         break;
       case "tournament":
         setNav({ page: "tournament", tournamentId: target.tournamentId ?? null });
@@ -144,6 +150,10 @@ export function App() {
         ) : null}
 
         {nav.page === "agents" ? <AgentsPage onGotoTournament={(id) => go({ page: "tournament", tournamentId: id ?? null })} /> : null}
+
+        {nav.page === "cohorts" ? (
+          <CohortsPage onOpenTournament={(id) => go({ page: "tournament", tournamentId: id })} />
+        ) : null}
 
         {nav.page === "tournament" ? (
           <TournamentPage initialId={nav.tournamentId} onOpen={openMatch} onGotoEditor={() => go({ page: "editor" })} />

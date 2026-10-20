@@ -1,0 +1,127 @@
+{
+  "mapId": "eval-tight-9",
+  "version": 1,
+  "width": 9,
+  "height": 9,
+  "hint": "9×9 微缩试探图：全图只有 1 个提交点，被两面短墙卡在正中，出生点到提交点要绕 4 步；没有森林，纯考走位与节奏。",
+  "symmetry": "水平镜像 + 垂直镜像（中央行/列自对称）：两个出生点在中央行左右对望，提交点独占正中一格",
+  "legend": {
+    ".": "平地 plain",
+    "#": "墙 wall（阻挡移动，阻挡视线）",
+    "~": "水 water（阻挡移动，不阻挡视线）",
+    "f": "森林 forest（可通行，阻挡视线，受击减伤且远处不可见）",
+    "S": "出生点 spawn",
+    "A": "弹药补给点 ammoDepot",
+    "G": "加油点 fuelStation",
+    "R": "资源点 resourceNode",
+    "D": "资源提交点 depositPoint"
+  },
+  "grid": [
+    ".........",
+    ".#.R.R.#.",
+    "..A...A..",
+    ".........",
+    ".GS#D#SG.",
+    ".........",
+    "..A...A..",
+    ".#.R.R.#.",
+    "........."
+  ],
+  "gridNote": "考察点：极小图上的最短路径与设施争抢。① 提交点只有 (4,4) 一个，正左右各一堵墙，两个出生点(2,4)(6,4)都必须绕到第 3 或第 5 行走，实测 4 步；② 全图 0 森林，没有隐蔽物，走位完全暴露；③ 墙只有 6 格（四角各一块 + 中央两格），刚好够卡视野与绕行；④ 弹药(2,2)等 4 处、加油(1,4)(7,4)、资源点(3,1)等 4 处都贴着出生点，保证开局不用为补给发愁，逼迫双方直奔中央提交点。",
+  "spawns": [
+    {
+      "x": 2,
+      "y": 4
+    },
+    {
+      "x": 6,
+      "y": 4
+    }
+  ],
+  "spawnsFor1v1": [
+    1,
+    2
+  ],
+  "ammoDepots": [
+    {
+      "x": 2,
+      "y": 2
+    },
+    {
+      "x": 6,
+      "y": 2
+    },
+    {
+      "x": 2,
+      "y": 6
+    },
+    {
+      "x": 6,
+      "y": 6
+    }
+  ],
+  "fuelStations": [
+    {
+      "x": 1,
+      "y": 4
+    },
+    {
+      "x": 7,
+      "y": 4
+    }
+  ],
+  "resourceNodes": [
+    {
+      "id": "R1",
+      "x": 3,
+      "y": 1,
+      "kind": "center",
+      "capacity": 8,
+      "initial": 8,
+      "regenEveryRounds": 4
+    },
+    {
+      "id": "R2",
+      "x": 5,
+      "y": 1,
+      "kind": "center",
+      "capacity": 8,
+      "initial": 8,
+      "regenEveryRounds": 4
+    },
+    {
+      "id": "R3",
+      "x": 3,
+      "y": 7,
+      "kind": "center",
+      "capacity": 8,
+      "initial": 8,
+      "regenEveryRounds": 4
+    },
+    {
+      "id": "R4",
+      "x": 5,
+      "y": 7,
+      "kind": "center",
+      "capacity": 8,
+      "initial": 8,
+      "regenEveryRounds": 4
+    }
+  ],
+  "depositPoints": [
+    {
+      "x": 4,
+      "y": 4
+    }
+  ],
+  "distanceReference_P1": {
+    "note": "以 1 号出生点 (2,4) 为起点、4 邻域最短步数（A* 实测，与 verify-map 的玩法审计同口径）；地图水平+垂直镜像，四个出生点等价。",
+    "spawn_to_ammoDepot": 2,
+    "spawn_to_fuelStation": 1,
+    "spawn_to_homeResourceNode": 4,
+    "spawn_to_centerResourceNode": 4,
+    "spawn_to_deposit": 4,
+    "spawn_to_oppositeSpawn": 6,
+    "centerResourceNode_to_deposit": 4
+  }
+}

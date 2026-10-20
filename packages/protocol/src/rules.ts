@@ -41,7 +41,8 @@ export const RulesetSchema = z.object({
   // 视野
   visionRadius: z.number().int().positive(),
   forestStealthRadius: z.number().int().positive(),
-  lastKnownMemoryRounds: z.number().int().positive(),
+  // 0 = 不记敌人位置（"情报要自己攒"的变体，见 rules-variants.ts 的 scout）：引擎判据是 round - rec.round > 0 即过期
+  lastKnownMemoryRounds: z.number().int().nonnegative(),
   // 观战
   turnIntervalMsDefault: z.number().int().positive(),
 });

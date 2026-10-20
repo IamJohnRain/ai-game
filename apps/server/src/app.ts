@@ -14,6 +14,8 @@ import type { ServerConfig } from "./config.ts";
 import type { MapRegistry } from "./maps.ts";
 import { Store } from "./store.ts";
 import { registerExternalRoutes } from "./routesExternal.ts";
+import { registerCohortRoutes } from "./routesCohorts.ts";
+import type { CohortRunner } from "./cohorts.ts";
 import { TournamentRunner } from "./tournaments.ts";
 import {
   Auth,
@@ -36,6 +38,8 @@ export interface AppDeps {
   registry: MapRegistry;
   /** 赛事运行器（可选注入，便于测试观察） */
   tournamentRunners?: Map<string, TournamentRunner>;
+  /** 评测批次运行器（可选注入，便于测试观察） */
+  cohortRunners?: Map<string, CohortRunner>;
 }
 
 /** 构建 Fastify 实例（与进程监听解耦，便于测试用 app.inject 直接打接口） */
@@ -44,6 +48,7 @@ export async function createApp(deps: AppDeps) {
   const store = deps.store;
   const registry = deps.registry;
   const tournamentRunners = deps.tournamentRunners ?? new Map<string, TournamentRunner>();
+  const cohortRunners = deps.cohortRunners ?? new Map<string, CohortRunner>();
   const app = Fastify({ logger: deps.config.logger ?? { level: process.env.LOG_LEVEL ?? "info" } });
   const auth = new Auth(deps.config.auth);
 
@@ -328,6 +333,14 @@ app.get("/api/matches/:id/report", async (req, reply) => {
 
 app.get("/api/leaderboard", async () => ({ rows: store.leaderboard() }));
 
+// 单模型画像（docs/08 §4.3）：过程分 + 它名下每个 Agent 的版本数与自测痕迹
+app.get("/api/models/:model/profile", async (req, reply) => {
+  const model = decodeURIComponent((req.params as { model: string }).model);
+  const profile = store.modelProfile(model);
+  if (!profile) return reply.code(404).send({ error: `没有找到模型 ${model} 的任何记录` });
+  return profile;
+});
+
 // ------------------------------------------------------------------ WebSocket 观战
 const channels = new Map<string, Set<{ send: (data: string) => void }>>();
 
@@ -376,6 +389,8 @@ app.register(async (instance) => {
 
 // ------------------------------------------------------------------ 对外能力（Agent 注册 / 脚本上传 / 任务书 / 1v1 赛事）
   registerExternalRoutes(app, { store, config, registry, tournamentRunners });
+  // 评测批次（docs/08）：多条 leg 的汇总评测 + 标尺对手 + 评级/画像
+  registerCohortRoutes(app, { store, config, registry, tournamentRunners, cohortRunners });
 
 // ------------------------------------------------------------------ 静态前端（构建产物存在时）
 const webDist = join(repoRoot, "apps", "web", "dist");
@@ -430,5 +445,5 @@ app.get("/*", async (req, reply) => {
     void reply.code(error.statusCode ?? 500).send({ error: error.message });
   });
 
-  return { app, store, registry, tournamentRunners, auth };
+  return { app, store, registry, tournamentRunners, cohortRunners, auth };
 }

@@ -3,3 +3,4 @@
 // （历史上这里还有一条"平台调用大模型生成脚本"的链路，已按需求整体删除。）
 export * from "./report.ts";
 export * from "./tournament.ts";
+export * from "./rating.ts";

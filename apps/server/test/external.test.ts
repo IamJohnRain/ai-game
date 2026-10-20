@@ -78,8 +78,8 @@ async function register(ctx: Ctx, overrides: Record<string, unknown> = {}) {
   assert.equal(res.statusCode, 200, res.body);
   return res.json() as {
     agent: { id: string; keyMasked: string; status: string };
-    key: string; taskDocUrl: string; uploadUrl: string; prompt: string;
-    limits: { zipMaxBytes: number; maxUploadAttempts: number; maxEntries: number; maxRatio: number; maxScriptLines: number };
+    key: string; taskDocUrl: string; uploadUrl: string; practiceUrl: string; prompt: string;
+    limits: { zipMaxBytes: number; maxUploadAttempts: number; maxEntries: number; maxRatio: number; maxScriptLines: number; maxRevisions: number; practiceRuns: number };
   };
 }
 
@@ -121,6 +121,10 @@ test("注册：字段齐全、密钥只回一次、库里不存明文、列表�
     assert.ok(reg.prompt.includes(reg.uploadUrl), "prompt 应带上传地址");
     assert.ok(reg.prompt.includes(`Bearer ${reg.key}`), "prompt 应带一次性密钥");
     assert.ok(reg.prompt.includes("API.pathFind") && reg.prompt.includes("§11"), "prompt 应点到'不挑图'与自查清单");
+    assert.ok(reg.prompt.includes(reg.practiceUrl), "prompt 应带练习通道地址（先自测再交卷）");
+    assert.equal(reg.practiceUrl.endsWith("/api/practice"), true);
+    assert.equal(reg.limits.maxRevisions, 3, "公开 limits 要带版本上限");
+    assert.equal(reg.limits.practiceRuns, 5, "公开 limits 要带练习配额");
     assert.equal(reg.prompt.includes("xiaoyiwork"), false, "prompt 里不得出现任何密码");
 
     const list = (await ctx.req({ method: "GET", url: "/api/agents" })).json().agents as { keyMasked: string; key?: string; thinkingLevel: string; notes: string }[];
@@ -302,7 +306,7 @@ test("任务书：不指定具体地图（只给通用地图规范），Markdown
     const text = md.body;
     for (const probe of [
       "外部 Agent 任务书", "function onTurn(state)", "API.pathFind", "strategy.js", "200 KB", "ZIP", "自查清单", "1v1 循环赛",
-      "地图规范", "字符表", "MAP.spawnsFor1v1", "不挑图",
+      "地图规范", "字符表", "MAP.spawnsFor1v1", "不挑图", "练习通道", "评测批次", "Bradley–Terry",
     ]) {
       assert.ok(text.includes(probe), `任务书应包含：${probe}`);
     }
@@ -326,7 +330,7 @@ test("任务书：不指定具体地图（只给通用地图规范），Markdown
     assert.deepEqual(auditMap(MAP_SPEC_EXAMPLE, DEFAULT_RULESET).errors, [], "结构示例也应通过玩法审计的硬性判据");
 
     const json = (await ctx.req({ method: "GET", url: "/api/task-doc?format=json" })).json();
-    assert.equal(json.version, "v1.1");
+    assert.equal(json.version, "v1.2");
     assert.equal(json.mapId, undefined, "任务书 JSON 不应再带 mapId（任务书与地图无关）");
     assert.match(json.endpoints.upload, /\/api\/upload$/);
     assert.equal(json.limits.zipMaxBytes, 204800);

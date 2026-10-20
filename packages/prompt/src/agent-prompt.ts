@@ -11,6 +11,10 @@ export interface AgentPromptOptions {
   taskDocUrl: string;
   /** 上传接口地址 */
   uploadUrl: string;
+  /** 练习通道地址（可选：给了就提示"先自测再交卷"） */
+  practiceUrl?: string;
+  /** 练习配额（与 practiceUrl 一起给） */
+  practiceQuota?: number;
   /** 一次性密钥（明文只在此刻存在） */
   key: string;
   agentName?: string;
@@ -38,6 +42,13 @@ export function renderAgentPrompt(opts: AgentPromptOptions): string {
     '    -H "Content-Type: application/zip" \\',
     "    --data-binary @strategy.zip",
     "",
+    ...(opts.practiceUrl
+      ? [
+        `自测（推荐）：先用同一把密钥调 POST ${opts.practiceUrl} 传同样的 zip，会跑完整校验 + 两局标尺对局（对手只有挂机者与平台基线），`,
+        `　　　　　 不消耗这把密钥、不计成绩，配额 ${opts.practiceQuota ?? 5} 次；跑通再正式提交。`,
+        "",
+      ]
+      : []),
     "要点：只允许使用全局 MAP / RULES / API；不要写死任何地图坐标与尺寸，开局用 API.pathFind 现算（校验会对你没见过的每一张地图各跑一遍）；",
     "禁用清单（Date、Math.random、require、eval、while(true) 等）见任务书 §5，上传规范见 §4，提交前照 §11 逐条自查。",
   ].join("\n");

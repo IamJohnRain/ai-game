@@ -12,6 +12,8 @@ export interface StoredSeat {
   scriptHash?: string;
   script?: string;
   validation?: { stage: string; mapId?: string; ok: boolean; detail?: string }[];
+  /** 参赛时用的脚本版本（批次评测用它把成绩归因到版本） */
+  revision?: number;
 }
 
 export interface PersistInput {
@@ -56,6 +58,7 @@ export function persistMatchResult(store: Store, input: PersistInput): string {
       // 脚本与哈希逐场留档：赛事结束后仍可回答"这一局跑的是哪份脚本"
       ...(seat.script ? { script: seat.script } : {}),
       ...(seat.scriptHash ? { scriptSha256: seat.scriptHash } : {}),
+      ...(seat.revision != null ? { revision: seat.revision } : {}),
       finalScore: st.score,
       rank: st.rank,
       stats: { ...st } as unknown as Record<string, unknown>,
