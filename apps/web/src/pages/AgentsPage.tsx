@@ -39,6 +39,8 @@ type Credential = {
   uploadUrl: string | null;
   taskDocUrl: string;
   limits: UploadLimits | null;
+  /** 可直接粘给目标 Agent 的启动提示（服务端渲染；老版本服务端不返回时为 null） */
+  prompt: string | null;
   origin: "register" | "reissue";
 };
 
@@ -208,6 +210,7 @@ export function AgentsPage({ onGotoTournament }: { onGotoTournament: (tournament
         uploadUrl: res.uploadUrl ? asHref(res.uploadUrl) : null,
         taskDocUrl: res.taskDocUrl ? asHref(res.taskDocUrl) : "/api/task-doc",
         limits: res.limits ?? null,
+        prompt: res.prompt ?? null,
         origin: "register",
       });
       setCopyState(null);
@@ -226,13 +229,14 @@ export function AgentsPage({ onGotoTournament }: { onGotoTournament: (tournament
     setBusy(a.id);
     try {
       const res = await api.reissueAgentKey(a.id);
-      // 重发响应只有 { agent, key }：上传地址/限制沿用本次会话已知的那份，缺失时回落到任务文档
+      // 重发的 prompt 里带的是**新密钥**：旧的 prompt 从这一刻起就是废的，不能沿用
       setCredential((cur) => ({
         key: res.key,
         agent: res.agent,
-        uploadUrl: cur?.uploadUrl ?? (taskDoc ? asHref(taskDoc.endpoints.upload) : null),
-        taskDocUrl: cur?.taskDocUrl ?? "/api/task-doc",
+        uploadUrl: res.uploadUrl ? asHref(res.uploadUrl) : (cur?.uploadUrl ?? (taskDoc ? asHref(taskDoc.endpoints.upload) : null)),
+        taskDocUrl: res.taskDocUrl ? asHref(res.taskDocUrl) : (cur?.taskDocUrl ?? "/api/task-doc"),
         limits: cur?.limits ?? taskDoc?.limits ?? null,
+        prompt: res.prompt ?? null,
         origin: "reissue",
       }));
       setCopyState(null);
@@ -357,7 +361,7 @@ export function AgentsPage({ onGotoTournament }: { onGotoTournament: (tournament
 
       {credential ? (
         <Section
-          title={credential.origin === "register" ? "一次性密钥（请立即复制）" : "重新签发的密钥（请立即复制）"}
+          title={credential.origin === "register" ? "一次性密钥 + 启动 prompt（请立即复制）" : "重新签发的密钥 + 启动 prompt（请立即复制）"}
           extra={
             <button className="btn btn-sm" onClick={() => setCredential(null)}>
               我已复制，隐藏密钥
@@ -378,11 +382,17 @@ export function AgentsPage({ onGotoTournament }: { onGotoTournament: (tournament
             </div>
             <div className="key-warn">
               此密钥仅显示一次，且只能使用一次。刷新或离开本页后将无法再次查看明文；若丢失只能「重新签发密钥」。
+              下面的<strong>启动 prompt</strong>里已经带上这把密钥与任务书地址，复制一次就能交给目标 Agent。
             </div>
             <div className="form-actions">
               <button className="btn btn-primary" onClick={() => void copy("密钥", credential.key)}>
                 复制密钥
               </button>
+              {credential.prompt ? (
+                <button className="btn" onClick={() => void copy("启动 prompt", credential.prompt!)}>
+                  复制启动 prompt
+                </button>
+              ) : null}
               <a className="btn" href={taskDocUrl} target="_blank" rel="noreferrer">
                 打开任务文档
               </a>
@@ -416,6 +426,24 @@ export function AgentsPage({ onGotoTournament }: { onGotoTournament: (tournament
                     >
                       复制 curl
                     </button>
+                  </div>
+                </>
+              ) : null}
+
+              {/* 启动 prompt：任务描述 + 任务书地址 + 密钥 + 上传命令，复制一次就能贴给目标 Agent */}
+              {credential.prompt ? (
+                <>
+                  <div className="field-label">
+                    启动 prompt（<strong>推荐用法</strong>：复制这一段直接粘给目标 Agent，它自己会去读任务书、写脚本、打包上传）：
+                  </div>
+                  <pre className="code code-prompt">{credential.prompt}</pre>
+                  <div className="form-actions">
+                    <button className="btn btn-primary" onClick={() => void copy("启动 prompt", credential.prompt!)}>
+                      复制 prompt
+                    </button>
+                    <a className="btn" href={taskDocUrl} target="_blank" rel="noreferrer">
+                      先自己看一眼任务书
+                    </a>
                   </div>
                 </>
               ) : null}

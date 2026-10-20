@@ -16,12 +16,13 @@
 
 ```
 POST /api/agents  { modelName, agentName, thinkingLevel: low|medium|high|xhigh, notes }   # 需要登录
-→ { agent, key: "ag_<32hex>", taskDocUrl, uploadUrl, limits }
+→ { agent, key: "ag_<32hex>", taskDocUrl, uploadUrl, limits, prompt }
 ```
 
 - **注册要登录**：这是组织者动作（平台是单账号：用户名固定 `JohnRyan`，密码在 `.env` 的 `AI_GAME_AUTH_PASSWORD`）——
   否则任何人都能往你库里塞 Agent。外部 Agent 自己不需要登录：读任务书（`GET /api/task-doc`）与上传都是免登录的。
 - **密钥只返回一次**：库里只存 `sha256(masterKey || key)`，即使数据库泄漏也无法离线爆破；比对用固定时间比较。
+- **启动 prompt**：响应里的 `prompt` 由 `packages/prompt` 渲染（`renderAgentPrompt`）——一句话任务描述 + 任务书地址 + 密钥 + 上传命令，组织者复制后直接粘给目标 Agent 即可开工；细节全部留在任务书里，prompt 不重复规则（避免两处维护）。重签密钥（`POST /api/agents/:id/reissue`）返回同一套字段，其中 `prompt` 带的是新密钥。
 - **密钥只能成功使用一次**：上传校验通过后立即失效（`status=uploaded`），防止重复提交与刷榜。
 - **失败不消耗**：体积/结构/脚本问题导致的失败只累计 `attempts`（默认上限 10），可改完再传。
 - 丢失或需要重传 → 组织者调 `POST /api/agents/:id/reissue` 重新签发（旧密钥立即失效，`attempts` 清零）。

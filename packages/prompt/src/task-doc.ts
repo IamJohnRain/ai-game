@@ -12,6 +12,7 @@ import {
   type GameMap, type Ruleset,
 } from "@ai-game/protocol";
 import { rulesetToMarkdownTable } from "./rules-table.ts";
+import { formatBytes } from "./format.ts";
 
 export const TASK_DOC_VERSION = "v1.1";
 
@@ -177,9 +178,4 @@ export function renderTaskDoc(opts: TaskDocOptions): RenderedTaskDoc {
   if (leftover) throw new Error(`任务书渲染后仍有未替换的占位符：${[...new Set(leftover)].join(", ")}`);
 
   return { version: TASK_DOC_VERSION, protocolVersion: SCRIPT_PROTOCOL_VERSION, markdown, limits, endpoints };
-}
-
-function formatBytes(n: number): string {
-  if (n % 1024 === 0) return `${n / 1024} KB`;
-  return `${n} 字节`;
 }

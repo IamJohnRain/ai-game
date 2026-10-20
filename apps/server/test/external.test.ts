@@ -77,7 +77,7 @@ async function register(ctx: Ctx, overrides: Record<string, unknown> = {}) {
   assert.equal(res.statusCode, 200, res.body);
   return res.json() as {
     agent: { id: string; keyMasked: string; status: string };
-    key: string; taskDocUrl: string; uploadUrl: string;
+    key: string; taskDocUrl: string; uploadUrl: string; prompt: string;
     limits: { zipMaxBytes: number; maxUploadAttempts: number; maxEntries: number; maxRatio: number; maxScriptLines: number };
   };
 }
@@ -113,6 +113,14 @@ test("注册：字段齐全、密钥只回一次、库里不存明文、列表�
     assert.ok(reg.uploadUrl.endsWith("/api/upload"));
     assert.equal(reg.limits.zipMaxBytes, 200 * 1024);
     assert.equal(reg.limits.zipMaxBytes, 204800);
+
+    // 启动 prompt：一句话任务 + 任务书地址 + 密钥 + 上传命令，组织者复制后可直接粘给目标 Agent
+    assert.ok(reg.prompt.includes("strategy.js"), "prompt 应说明要交什么");
+    assert.ok(reg.prompt.includes(reg.taskDocUrl), "prompt 应带任务书地址");
+    assert.ok(reg.prompt.includes(reg.uploadUrl), "prompt 应带上传地址");
+    assert.ok(reg.prompt.includes(`Bearer ${reg.key}`), "prompt 应带一次性密钥");
+    assert.ok(reg.prompt.includes("API.pathFind") && reg.prompt.includes("§11"), "prompt 应点到'不挑图'与自查清单");
+    assert.equal(reg.prompt.includes("xiaoyiwork"), false, "prompt 里不得出现任何密码");
 
     const list = (await ctx.req({ method: "GET", url: "/api/agents" })).json().agents as { keyMasked: string; key?: string; thinkingLevel: string; notes: string }[];
     assert.equal(list.length, 1);
@@ -247,9 +255,15 @@ test("重新签发密钥：旧密钥失效、新密钥可用", async () => {
   const ctx = await boot();
   try {
     const reg = await register(ctx);
-    const reissued = (await ctx.req({ method: "POST", url: `/api/agents/${reg.agent.id}/reissue` })).json() as { key: string; agent: { keyMasked: string } };
+    const reissued = (await ctx.req({ method: "POST", url: `/api/agents/${reg.agent.id}/reissue` })).json() as {
+      key: string; agent: { keyMasked: string }; prompt: string; taskDocUrl: string;
+    };
     assert.ok(reissued.key.startsWith("ag_"));
     assert.notEqual(reissued.key, reg.key);
+    // 重签返回的 prompt 必须换成新密钥（旧 prompt 从这一刻起就是废的，别让组织者粘错）
+    assert.ok(reissued.prompt.includes(`Bearer ${reissued.key}`), "重签 prompt 应带新密钥");
+    assert.equal(reissued.prompt.includes(reg.key), false, "重签 prompt 不得残留旧密钥");
+    assert.ok(reissued.prompt.includes(reissued.taskDocUrl), "重签 prompt 应带任务书地址");
     const old = await uploadScript(ctx, reg.key, baseline);
     assert.equal(old.statusCode, 401, "旧密钥应失效");
     const fresh = await uploadScript(ctx, reissued.key, baseline);

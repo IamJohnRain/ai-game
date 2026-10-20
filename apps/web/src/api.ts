@@ -159,9 +159,18 @@ export type AgentRegisterResult = {
   taskDocUrl: string;
   uploadUrl: string;
   limits: UploadLimits;
+  /** 可直接粘给目标 Agent 的启动提示：任务描述 + 任务书地址 + 密钥 + 上传命令 */
+  prompt: string;
 };
 
-export type AgentReissueResult = { agent: Agent; key: string };
+export type AgentReissueResult = {
+  agent: Agent;
+  key: string;
+  taskDocUrl: string;
+  uploadUrl: string;
+  /** 新密钥对应的启动提示（旧 prompt 里的密钥已作废，别再用） */
+  prompt: string;
+};
 
 export type TaskDocJson = {
   version: string;

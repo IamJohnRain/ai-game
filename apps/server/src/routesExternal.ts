@@ -9,7 +9,7 @@ import { z } from "zod";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { DEFAULT_MAP_1V1, DEFAULT_RULESET, type Ruleset } from "@ai-game/protocol";
 import { checkScript } from "@ai-game/script-check";
-import { DEFAULT_UPLOAD_LIMITS_PUBLIC, SCRIPT_PROTOCOL_VERSION, renderTaskDoc, TASK_DOC_VERSION } from "@ai-game/prompt";
+import { DEFAULT_UPLOAD_LIMITS_PUBLIC, SCRIPT_PROTOCOL_VERSION, renderAgentPrompt, renderTaskDoc, TASK_DOC_VERSION } from "@ai-game/prompt";
 import { createZip, DEFAULT_UPLOAD_LIMITS, readZip, type ZipRejectReason } from "@ai-game/zippack";
 import type { ServerConfig } from "./config.ts";
 import { bearerFrom, generateAgentKey, hashAgentKey, maskAgentKey } from "./agentKeys.ts";
@@ -129,14 +129,22 @@ export function registerExternalRoutes(app: FastifyInstance, deps: ExternalRoute
       maxAttempts: DEFAULT_UPLOAD_LIMITS_PUBLIC.maxUploadAttempts,
     });
     const base = baseUrlOf(req);
+    const taskDocUrl = `${base}/api/task-doc`;
+    const uploadUrl = `${base}/api/upload`;
     return {
       agent,
       key, // 仅此一次返回明文；库里只存哈希
       protocolVersion: SCRIPT_PROTOCOL_VERSION,
       // 任务书与地图无关（赛图开赛时才定），给的是一条固定 URL，读到的就是最新版
-      taskDocUrl: `${base}/api/task-doc`,
-      uploadUrl: `${base}/api/upload`,
+      taskDocUrl,
+      uploadUrl,
       limits: DEFAULT_UPLOAD_LIMITS_PUBLIC,
+      // 组织者可以直接把这段 prompt 粘给目标 Agent：任务描述 + 任务书地址 + 密钥 + 上传命令
+      prompt: renderAgentPrompt({
+        taskDocUrl, uploadUrl, key,
+        agentName: agent.agentName, modelName: agent.modelName,
+        limits: DEFAULT_UPLOAD_LIMITS_PUBLIC,
+      }),
     };
   });
 
@@ -147,7 +155,22 @@ export function registerExternalRoutes(app: FastifyInstance, deps: ExternalRoute
     if (!store.getAgent(id)) return fail(reply, 404, "Agent 不存在");
     const key = generateAgentKey();
     const agent = store.reissueAgentKey(id, hashAgentKey(key, config.masterKey), maskAgentKey(key));
-    return { agent, key };
+    if (!agent) return fail(reply, 404, "Agent 不存在"); // 与上面那次查询之间的竞态兜底（例如刚被并发删除）
+    // 与首次注册同一套回复：新密钥 + 可直接粘贴的启动 prompt（旧 prompt 里的密钥已作废）
+    const base = baseUrlOf(req);
+    const taskDocUrl = `${base}/api/task-doc`;
+    const uploadUrl = `${base}/api/upload`;
+    return {
+      agent,
+      key,
+      taskDocUrl,
+      uploadUrl,
+      prompt: renderAgentPrompt({
+        taskDocUrl, uploadUrl, key,
+        agentName: agent.agentName, modelName: agent.modelName,
+        limits: DEFAULT_UPLOAD_LIMITS_PUBLIC,
+      }),
+    };
   });
 
   app.delete("/api/agents/:id", async (req) => {

@@ -1321,6 +1321,13 @@ textarea {
   white-space: pre;
 }
 
+/* 启动 prompt：整段粘给模型，所以长行要自动换行（不然横向滚动看不到全貌、也不方便整段选中） */
+.code-prompt {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+}
+
 .raw summary {
   cursor: pointer;
   color: var(--text-dim);
