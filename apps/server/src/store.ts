@@ -122,7 +122,10 @@ export interface LeaderboardRow {
   avgKillDeathDiff: number;
   avgDecisionMs: number;
   maxDecisionMs: number;
-  avgSupplyShare: number;
+  /** 补给花费 / 得分：只在有产出的对局上统计（没有任何产出时为 null，见 zeroOutputRate） */
+  avgSupplyShare: number | null;
+  /** "一局都没提交也没击杀"的比例：指标不可算的原因，本身也是信号 */
+  zeroOutputRate: number;
   disqualifiedRate: number;
   /** 需要 agents 关联的字段：没有任何 Agent 记录时为 null（老数据/已删除 Agent） */
   firstTryRate: number | null;
@@ -711,8 +714,13 @@ const LEADERBOARD_SQL = `
          AVG(COALESCE(json_extract(p.stats_json, '$.kills'), 0) - COALESCE(json_extract(p.stats_json, '$.deaths'), 0)) AS avgKillDeathDiff,
          AVG(COALESCE(json_extract(p.stats_json, '$.avgDecisionMs'), 0)) AS avgDecisionMs,
          MAX(COALESCE(json_extract(p.stats_json, '$.maxDecisionMs'), 0)) AS maxDecisionMs,
-         AVG((-(COALESCE(json_extract(p.stats_json, '$.scoreBreakdown.ammo'), 0) + COALESCE(json_extract(p.stats_json, '$.scoreBreakdown.fuel'), 0))) * 1.0
-             / MAX(1, COALESCE(json_extract(p.stats_json, '$.scoreBreakdown.deposit'), 0) + COALESCE(json_extract(p.stats_json, '$.scoreBreakdown.kill'), 0))) AS avgSupplyShare,
+         -- 补给占比只在"有产出"的对局上算：一局没提交没击杀时这个比值没有意义（分母趋零会把 24 点油费算成 114 倍）
+         AVG(CASE WHEN (COALESCE(json_extract(p.stats_json, '$.scoreBreakdown.deposit'), 0) + COALESCE(json_extract(p.stats_json, '$.scoreBreakdown.kill'), 0)) > 0
+             THEN (-(COALESCE(json_extract(p.stats_json, '$.scoreBreakdown.ammo'), 0) + COALESCE(json_extract(p.stats_json, '$.scoreBreakdown.fuel'), 0))) * 1.0
+                  / (COALESCE(json_extract(p.stats_json, '$.scoreBreakdown.deposit'), 0) + COALESCE(json_extract(p.stats_json, '$.scoreBreakdown.kill'), 0))
+             END) AS avgSupplyShare,
+         AVG(CASE WHEN (COALESCE(json_extract(p.stats_json, '$.scoreBreakdown.deposit'), 0) + COALESCE(json_extract(p.stats_json, '$.scoreBreakdown.kill'), 0)) = 0
+             THEN 1.0 ELSE 0.0 END) AS zeroOutputRate,
          AVG(CASE WHEN json_extract(p.stats_json, '$.disqualified') = 1 THEN 1.0 ELSE 0.0 END) AS disqualifiedRate,
          AVG(CASE WHEN a.id IS NULL THEN NULL WHEN a.attempts_at_upload = 0 THEN 1.0 ELSE 0.0 END) AS firstTryRate,
          AVG(CASE WHEN a.id IS NULL THEN NULL ELSE a.revision END) AS avgRevisions,
@@ -725,7 +733,8 @@ const EMPTY_LEADERBOARD: LeaderboardRow = {
   modelId: "", matches: 0, avgScore: 0, wins: 0, scriptOkRate: 0,
   avgInvalidActions: 0, avgStrikes: 0, avgInvalidRate: 0, avgEmergencyRate: 0,
   avgUnitsPer100: 0, avgKillDeathDiff: 0, avgDecisionMs: 0, maxDecisionMs: 0,
-  avgSupplyShare: 0, disqualifiedRate: 0, firstTryRate: null, avgRevisions: null, avgPracticeRuns: null,
+  avgSupplyShare: null,
+  zeroOutputRate: 0, disqualifiedRate: 0, firstTryRate: null, avgRevisions: null, avgPracticeRuns: null,
 };
 
 function round(x: unknown, digits: number): number {
@@ -750,7 +759,8 @@ function mapLeaderboardRow(r: Record<string, unknown>): LeaderboardRow {
     avgKillDeathDiff: round(r.avgKillDeathDiff, 2),
     avgDecisionMs: round(r.avgDecisionMs, 3),
     maxDecisionMs: round(r.maxDecisionMs, 3),
-    avgSupplyShare: round(r.avgSupplyShare, 3),
+    avgSupplyShare: r.avgSupplyShare == null ? null : round(r.avgSupplyShare, 3),
+    zeroOutputRate: round(r.zeroOutputRate, 3),
     disqualifiedRate: round(r.disqualifiedRate, 3),
     firstTryRate: r.firstTryRate == null ? null : round(r.firstTryRate, 3),
     avgRevisions: r.avgRevisions == null ? null : round(r.avgRevisions, 2),

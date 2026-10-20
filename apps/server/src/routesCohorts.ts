@@ -267,10 +267,10 @@ export function registerCohortRoutes(app: FastifyInstance, deps: CohortRouteDeps
     const metrics = cohort.metrics as { rows?: Record<string, unknown>[]; games?: number } | null;
     if (metrics?.rows?.length) {
       lines.push("## 过程分画像（按每回合/每单位归一，docs/08 §4）", "");
-      lines.push("| 参赛者 | 局数 | AP 利用率 | 应急移动率 | 每百回合提交 | 终局利用率 | 补给占比 | 死杀差 | 平均决策 | 最慢决策 | 适应力(σ) |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+      lines.push("| 参赛者 | 局数 | AP 利用率 | 应急移动率 | 每百回合提交 | 终局利用率 | 补给占比 | 无产出局 | 死杀差 | 平均决策 | 最慢决策 | 适应力(σ) |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
       for (const r of metrics.rows) {
         const f = (k: string) => String(r[k] ?? "-");
-        lines.push(`| ${f("agentName")} | ${f("matches")} | ${f("apUtilization")} | ${f("emergencyRate")} | ${f("unitsPer100")} | ${f("endgameShare")} | ${f("supplyShare")} | ${f("killDeathDiff")} | ${f("avgDecisionMs")}ms | ${f("maxDecisionMs")}ms | ${f("adaptivity")} |`);
+        lines.push(`| ${f("agentName")} | ${f("matches")} | ${f("apUtilization")} | ${f("emergencyRate")} | ${f("unitsPer100")} | ${f("endgameShare")} | ${r["supplyShare"] ?? "—"} | ${f("zeroOutputRate")} | ${f("killDeathDiff")} | ${f("avgDecisionMs")}ms | ${f("maxDecisionMs")}ms | ${f("adaptivity")} |`);
       }
       lines.push("");
     }

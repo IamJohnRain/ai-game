@@ -254,7 +254,7 @@ export class CohortRunner extends EventEmitter {
       matches: number; turns: number; invalid: number; moves: number; emergency: number;
       units: number; deposits: number; kills: number; deaths: number; strikes: number; dq: number;
       decisionMsSum: number; maxDecisionMs: number; ammoSpend: number; fuelSpend: number; depositScore: number; killScore: number;
-      endgameUnits: number; totalUnits: number;
+      endgameUnits: number; totalUnits: number; zeroOutput: number;
       byLeg: Map<number, { scoreSum: number; games: number }>;
     };
     const acc = new Map<string, Acc>();
@@ -267,7 +267,7 @@ export class CohortRunner extends EventEmitter {
           matches: 0, turns: 0, invalid: 0, moves: 0, emergency: 0, units: 0, deposits: 0,
           kills: 0, deaths: 0, strikes: 0, dq: 0, decisionMsSum: 0, maxDecisionMs: 0,
           ammoSpend: 0, fuelSpend: 0, depositScore: 0, killScore: 0,
-          endgameUnits: 0, totalUnits: 0, byLeg: new Map(),
+          endgameUnits: 0, totalUnits: 0, zeroOutput: 0, byLeg: new Map(),
         };
         acc.set(id, a);
       }
@@ -319,6 +319,7 @@ export class CohortRunner extends EventEmitter {
         a.depositScore += breakdown["deposit"] ?? 0;
         a.killScore += breakdown["kill"] ?? 0;
         a.totalUnits += st["unitsDeposited"] ?? 0;
+        if ((breakdown["deposit"] ?? 0) + (breakdown["kill"] ?? 0) <= 0) a.zeroOutput += 1;
         a.endgameUnits += endgameUnits.get(seat.seat)?.last ?? 0;
         const leg = a.byLeg.get(m.legIndex) ?? { scoreSum: 0, games: 0 };
         leg.scoreSum += seat.score;
@@ -340,7 +341,9 @@ export class CohortRunner extends EventEmitter {
         emergencyRate: round(a.emergency / Math.max(1, a.moves), 4),
         unitsPer100: round((a.units * 100) / Math.max(1, a.turns), 2),
         endgameShare: round(a.endgameUnits / Math.max(1, a.totalUnits), 3),
-        supplyShare: round((a.ammoSpend + a.fuelSpend) / Math.max(1, a.depositScore + a.killScore), 3),
+        // 与排行榜同口径：没有产出时不给比值（否则 24 点油费会被算成"114 倍"）
+        supplyShare: a.depositScore + a.killScore > 0 ? round((a.ammoSpend + a.fuelSpend) / (a.depositScore + a.killScore), 3) : null,
+        zeroOutputRate: round(a.zeroOutput / Math.max(1, a.matches), 3),
         killDeathDiff: a.kills - a.deaths,
         strikes: a.strikes,
         disqualifiedRate: round(a.dq / Math.max(1, a.matches), 3),

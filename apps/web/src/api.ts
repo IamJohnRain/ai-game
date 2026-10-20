@@ -65,7 +65,10 @@ export type LeaderboardRow = {
   avgKillDeathDiff: number;
   avgDecisionMs: number;
   maxDecisionMs: number;
-  avgSupplyShare: number;
+  /** 补给花费 / 得分：只在有产出的对局上统计（无产出时为 null） */
+  avgSupplyShare: number | null;
+  /** "一局都没提交也没击杀"的比例 */
+  zeroOutputRate: number;
   disqualifiedRate: number;
   /** 与 agents 关联的字段：老数据/已删除 Agent 时为 null */
   firstTryRate: number | null;
@@ -266,7 +269,8 @@ export type CohortMetricRow = {
   emergencyRate: number;
   unitsPer100: number;
   endgameShare: number;
-  supplyShare: number;
+  supplyShare: number | null;
+  zeroOutputRate: number;
   killDeathDiff: number;
   strikes: number;
   disqualifiedRate: number;

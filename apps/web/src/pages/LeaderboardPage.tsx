@@ -91,7 +91,10 @@ export function LeaderboardPage() {
                   <td>{r.firstTryRate === null || r.firstTryRate === undefined ? "-" : `${(r.firstTryRate * 100).toFixed(0)}%`}</td>
                   <td>{(1 - r.avgInvalidRate) * 100 > 0 ? ((1 - r.avgInvalidRate) * 100).toFixed(2) : "100.00"}%</td>
                   <td>{r.avgUnitsPer100.toFixed(1)}</td>
-                  <td>{r.avgSupplyShare.toFixed(2)}</td>
+                  <td>
+                    {r.avgSupplyShare === null || r.avgSupplyShare === undefined ? "—" : r.avgSupplyShare.toFixed(2)}
+                    <span className="small muted">（无产出 {((r.zeroOutputRate ?? 0) * 100).toFixed(0)}%）</span>
+                  </td>
                   <td>{r.avgKillDeathDiff}</td>
                   <td className="mono small">
                     {r.avgDecisionMs.toFixed(2)}/{r.maxDecisionMs.toFixed(1)}ms

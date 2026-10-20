@@ -469,6 +469,7 @@ export function CohortsPage({ onOpenTournament }: { onOpenTournament: (tournamen
               </table>
               <div className="hint">
                 AP 利用率 = 1 − 无效动作率（浪费掉的行动力）；终局利用率 = 最后 20% 回合的提交占比（会不会做终局估值）；
+                补给占比只在有产出的局上算（括号里是无产出局比例——一局都没提交也没击杀，本身也是信号）；
                 适应力 σ = 各 leg 平均分的标准差（越小越"换个环境也稳"）。
               </div>
             </Section>

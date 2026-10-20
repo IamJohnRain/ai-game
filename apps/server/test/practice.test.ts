@@ -167,6 +167,37 @@ test("练习闸门与上传一致：假密钥 401、超大包 413、结构攻击
   } finally { await ctx.close(); }
 });
 
+test("补给占比不会因为「零产出局」而爆炸：没有产出时给 null，并单独报无产出局占比", async () => {
+  const ctx = await boot();
+  try {
+    const idle = await register(ctx, "躺平者", "m-zerooutput");
+    const worker = await register(ctx, "干活的", "m-zerooutput");
+    const idleScript = 'function onInit() {}\nfunction onTurn() { return [{ type: "wait" }]; }\n';
+    for (const [key, script] of [[idle.key, idleScript], [worker.key, baseline]] as const) {
+      const up = await ctx.req({
+        method: "POST", url: "/api/upload",
+        headers: { authorization: `Bearer ${key}`, "content-type": "application/zip" },
+        payload: createZip([{ name: "strategy.js", data: script }]),
+      });
+      assert.equal(up.statusCode, 200, up.body);
+    }
+    const t = await ctx.req({
+      method: "POST", url: "/api/tournaments",
+      payload: { agentIds: [idle.agent.id, worker.agent.id], gamesPerPair: 1, maxRounds: 40, seed: 3 },
+    });
+    const id = (t.json() as { tournamentId: string }).tournamentId;
+    for (let i = 0; i < 200; i++) {
+      if (ctx.store.getTournament(id)!.status === "finished") break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const row = ctx.store.leaderboard().find((r) => r.modelId === "m-zerooutput")!;
+    assert.equal(row.zeroOutputRate, 0.5, "两个 Agent 里有一个一局都没产出 → 无产出局占比 50%");
+    // 关键回归：分子（补给花费）不能被零产出局放大成天文数字（线上曾算出 114 倍）
+    assert.ok(row.avgSupplyShare !== null && row.avgSupplyShare > 0 && row.avgSupplyShare < 2,
+      `补给占比只能在有产出的局上算，实际 ${row.avgSupplyShare}`);
+  } finally { await ctx.close(); }
+});
+
 test("版本化提交：每版一把一次性密钥、revision 自增、历史留档、上限闸门、成绩按版本归因", async () => {
   const ctx = await boot();
   try {
@@ -275,6 +306,8 @@ test("排行榜新字段：过程分按每回合归一，maxDecisionMs ≥ avgDe
     assert.ok(row.maxDecisionMs >= row.avgDecisionMs, `max(${row.maxDecisionMs}) 应 ≥ avg(${row.avgDecisionMs})`);
     assert.equal(row.firstTryRate, 1, "两个 Agent 都是一次过");
     assert.equal(row.avgRevisions, 1, "平均版本数 1");
-    assert.ok(row.avgEmergencyRate >= 0 && row.avgSupplyShare >= 0);
+    assert.ok(row.avgEmergencyRate >= 0);
+    assert.ok(row.avgSupplyShare !== null && row.avgSupplyShare > 0 && row.avgSupplyShare < 2, `补给占比应在合理区间（0~2），实际 ${row.avgSupplyShare}`);
+    assert.equal(row.zeroOutputRate, 0, "这一场双方都有提交，不该有无产出局");
   } finally { await ctx.close(); }
 });
