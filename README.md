@@ -342,7 +342,7 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8787/login  # 服务�
 - **日志老化三层**（互不依赖应用自身，细节与参数见 [docs/07](docs/07-部署.md)）：
   logrotate 每天一轮（单文件 > 20 MB 即切、保留 14 份并压缩）→ crontab 每 15 分钟兜底（单文件 > 40 MB 立即切、
   删 14 天前归档、logs 目录硬上限 200 MB）→ 分区水位保护（≥85% 只留最近 3 份；≥92% 清空全部日志）。
-- 可覆盖配置写在 `~/ai-game/.env`（`HOST`/`PORT`/`AI_GAME_AUTH_PASSWORD`/`AI_GAME_SESSION_TTL_MS`/`AI_GAME_TURN_INTERVAL_MS`/`AI_GAME_MAX_CONCURRENT`/`AI_GAME_MASTER_KEY`）。
+- 可覆盖配置写在 `~/ai-game/.env`（`HOST`/`PORT`/`AI_GAME_AUTH_PASSWORD`/`AI_GAME_SESSION_TTL_MS`/`AI_GAME_TURN_INTERVAL_MS`/`AI_GAME_MAX_CONCURRENT`/`AI_GAME_PUBLIC_URL`/`AI_GAME_MASTER_KEY`）。
 - 常用运维：`systemctl status|restart ai-game`、`tail -f ~/ai-game/logs/app.log`、`tail ~/ai-game/logs/maintenance.log`。
 - 探活/自检用 `GET /login`（免登录，200 即就绪）——`/api/health` 现在需要登录，别拿它做探针。
 

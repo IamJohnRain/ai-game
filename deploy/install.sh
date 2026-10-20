@@ -63,6 +63,10 @@ AI_GAME_AUTH_PASSWORD=__GENERATED_PASSWORD__
 # AI_GAME_AUTH_MAX_FAILURES=10
 # 走 HTTPS 时打开（Cookie 加 Secure）
 # AI_GAME_COOKIE_SECURE=1
+# 对外可访问的基础地址：设置后，注册响应/任务书/启动 prompt 里的 URL 一律用它。
+# 组织者自己走 SSH 隧道或内网访问时，把这里填成"外部 Agent 真正能访问到的那个地址"，
+# 否则 prompt 里会带上 127.0.0.1 这种只有你本机才通行的地址。
+# AI_GAME_PUBLIC_URL=https://your-domain.com
 ENVEOF
   AUTH_PASS="$("$NODE_BIN" -e 'console.log(require("node:crypto").randomBytes(18).toString("base64url"))')"
   # 生成的是 base64url（A-Za-z0-9-_），放进 sed 替换里没有转义问题

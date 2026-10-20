@@ -20,6 +20,11 @@ export interface ServerConfig {
   defaultTurnIntervalMs: number;
   /** 单用户并发比赛数上限 */
   maxConcurrentMatches: number;
+  /**
+   * 对外可访问的基础地址（可选）：设置后，注册响应与任务书里的 URL 一律用它。
+   * 用途：组织者自己可能是通过 SSH 隧道 / 内网地址访问平台的，但**外部 Agent 拿到的地址必须是它自己能访问到的那一个**。
+   */
+  publicUrl: string;
   /** 登录与会话：用户名固定，密码来自 AI_GAME_AUTH_PASSWORD（默认见 auth.ts） */
   auth: AuthConfig;
   /** 日志配置（测试时可关闭） */
@@ -56,6 +61,7 @@ export function loadConfig(): ServerConfig {
     masterKey,
     defaultTurnIntervalMs: Number(process.env.AI_GAME_TURN_INTERVAL_MS ?? 1200),
     maxConcurrentMatches: Number(process.env.AI_GAME_MAX_CONCURRENT ?? 4),
+    publicUrl: (process.env.AI_GAME_PUBLIC_URL ?? "").trim().replace(/\/+$/, ""),
     auth: {
       // 用户名固定（需求如此）；密码**没有内置默认值**：
       // 优先 AI_GAME_AUTH_PASSWORD（.env），留空则由进程入口自动生成 data/auth.password（见 auth.ts）

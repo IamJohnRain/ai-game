@@ -21,7 +21,7 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..")
 const baseline = readFileSync(join(repoRoot, "docs", "examples", "baseline-strategy.js"), "utf8");
 const idle = `function onInit() {}\nfunction onTurn() { return [{ type: "wait" }]; }\n`;
 
-async function boot() {
+async function boot(overrides: Partial<ServerConfig> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "ai-game-ext-"));
   const base = loadConfig();
   const config: ServerConfig = {
@@ -34,6 +34,7 @@ async function boot() {
     logger: false,
     // 仓库里没有默认密码：测试显式给一个
     auth: { ...base.auth, password: "test-password" },
+    ...overrides,
   };
   const store = new Store(config.dbPath, config.masterKey);
   const registry = new MapRegistry(join(dir, "maps"));
@@ -269,6 +270,27 @@ test("重新签发密钥：旧密钥失效、新密钥可用", async () => {
     const fresh = await uploadScript(ctx, reissued.key, baseline);
     assert.equal(fresh.statusCode, 200, fresh.body);
   } finally { await ctx.close(); }
+});
+
+test("对外地址：配了 AI_GAME_PUBLIC_URL 就一律用它（组织者走隧道时，外部 Agent 才拿得到够得着的地址）", async () => {
+  // 通过环境变量走一遍 loadConfig 的规整逻辑（末尾斜杠要去掉）
+  const prev = process.env.AI_GAME_PUBLIC_URL;
+  process.env.AI_GAME_PUBLIC_URL = "https://tank.example.com/";
+  const ctx = await boot({ publicUrl: loadConfig().publicUrl });
+  try {
+    assert.equal(ctx.config.publicUrl, "https://tank.example.com", "末尾斜杠应被规整掉");
+    const reg = await register(ctx);
+    assert.equal(reg.taskDocUrl, "https://tank.example.com/api/task-doc");
+    assert.equal(reg.uploadUrl, "https://tank.example.com/api/upload");
+    assert.ok(reg.prompt.includes("https://tank.example.com/api/upload"), "prompt 也要用对外地址");
+    assert.equal(reg.prompt.includes("127.0.0.1"), false, "prompt 不得出现隧道/本机地址");
+    const doc = await ctx.req({ method: "GET", url: "/api/task-doc?format=json" });
+    assert.equal(doc.json().endpoints.register, "https://tank.example.com/api/agents");
+  } finally {
+    if (prev === undefined) delete process.env.AI_GAME_PUBLIC_URL;
+    else process.env.AI_GAME_PUBLIC_URL = prev;
+    await ctx.close();
+  }
 });
 
 test("任务书：不指定具体地图（只给通用地图规范），Markdown 含协议/规范/数值/上传规范；JSON 形态给出端点与上限", async () => {

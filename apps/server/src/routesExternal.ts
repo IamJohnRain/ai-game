@@ -92,7 +92,10 @@ export function registerExternalRoutes(app: FastifyInstance, deps: ExternalRoute
     return entry;
   };
 
+  // 对外地址：配了 AI_GAME_PUBLIC_URL 就一律用它（组织者自己可能走隧道/内网，但外部 Agent 得拿到它够得着的地址），
+  // 否则按请求头推断（反代场景认 X-Forwarded-Proto/Host）
   const baseUrlOf = (req: FastifyRequest): string => {
+    if (config.publicUrl) return config.publicUrl;
     const proto = (req.headers["x-forwarded-proto"] as string) ?? "http";
     const host = (req.headers["x-forwarded-host"] as string) ?? req.headers.host ?? `127.0.0.1:${config.port}`;
     return `${proto}://${host}`;
