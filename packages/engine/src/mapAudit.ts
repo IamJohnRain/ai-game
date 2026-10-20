@@ -6,7 +6,7 @@
 //                 设施可达性、出生点等价性、1v1 出生点声明、经济是否正循环、是否容易打成僵局等。
 // 审计只给结论（errors / warnings），不抛异常，便于编辑器实时显示。
 import {
-  DEFAULT_RULESET, chebyshev, validateMap,
+  DEFAULT_RULESET, MAP_MAX_DIM, MAP_MIN_DIM, chebyshev, validateMap,
   type GameMap, type Pos, type Ruleset,
 } from "@ai-game/protocol";
 import { PathFinder } from "./pathfind.ts";
@@ -39,8 +39,8 @@ export interface MapAudit {
   spawnDistances: number[];
 }
 
-const MAX_DIM = 64;
-const MIN_DIM = 9;
+const MAX_DIM = MAP_MAX_DIM;
+const MIN_DIM = MAP_MIN_DIM;
 
 /** 取离 from 最近的某个坐标集合中的点 */
 function nearest(pf: PathFinder, from: Pos, targets: Pos[]): { pos: Pos; steps: number } | null {

@@ -23,7 +23,7 @@
 
 ### 5.3 游戏速览（完整数值见第 7 节）
 
-回合制，2~4 方对战（1v1 或多人混战，见第 6 节本局地图），共 `RULES.maxRounds` 轮；每轮每个存活坦克各行动一次（**行动顺序每轮轮换**，脚本不得依赖固定先后手）。
+回合制，2~4 方对战（1v1 或多人混战）；**本局地图在开赛时才确定，任务书不绑定具体地图**（通用规范见第 6 节）。共 `RULES.maxRounds` 轮；每轮每个存活坦克各行动一次（**行动顺序每轮轮换**，脚本不得依赖固定先后手）。
 你的每个回合有 `RULES.apPerTurn` 点行动力 AP，脚本返回最多同样数量的动作，按顺序执行。
 核心循环：**去资源点采集 → 去提交点交资源换分 → 顺路补弹药和燃油**。补弹药扣分、加油扣分、死亡扣分；提交资源得分、击杀敌方得分。
 死亡后：扣 `RULES.deathPenalty` 分，载货清零，在出生点复活，并**跳过 `RULES.respawnRounds` 个自己的回合**（停机期间 `onTurn` 不会被调用，所以你在 `onTurn` 里只会看到"自己还活着"）。
@@ -33,26 +33,35 @@
 
 #### 5.4.1 onInit(ctx)
 
-每场比赛开始时调用一次，参数 ctx：
+每场比赛开始时调用一次，参数 ctx（字段说明见表）：
 
 ```json
 {{CTX_JSON}}
 ```
 
-`ctx.mySpawn` 就是你的出生点坐标。可以在这里做预计算（例如算出出生点到各设施、各资源点的距离或路径），把结果存在模块级变量里供 `onTurn` 使用。
+| 字段 | 说明 |
+| --- | --- |
+| `apiVersion` / `rulesetVersion` | 协议版本 / 数值规则版本（与文档页首列出的版本一致） |
+| `mapVersion` | 字符串标签 `"<赛图 id>@<版本>"`；**地图本体不在 ctx 里**，用全局 `MAP` |
+| `matchId` / `playerName` / `seed` | 本场比赛 id / 你的名字 / 本场为你派生的种子（要随机数请用 `API.random()`，不要自己造） |
+| `seat` | 你的座位号（1 基）；1v1 时是 1 或 2，多人局是 1~4 |
+| `mySpawn` | 你的出生点 `{x,y}`（等于 `MAP.spawns[seat-1]`，也是 `state.self.spawn`） |
+| `playerCount` | 本场参赛人数（2 / 3 / 4） |
+
+`ctx.mySpawn` 是你唯一的"已知起点"。可以在这里做预计算（例如用 `API.pathFind` 算出出生点到各设施、各资源点的距离或路径），把结果存在模块级变量里供 `onTurn` 使用。
 
 #### 5.4.2 全局常量（onInit 与 onTurn 中都可直接使用，均为冻结对象）
 
-**MAP** —— 本局地图（完整 JSON 见第 6 节，等值于 `ctx.map`）：
+**MAP** —— 本局地图（**每张图都不一样**，结构见第 6 节；这是全局对象，`ctx` 里没有地图）：
 
 | 字段 | 说明 |
 | --- | --- |
-| `MAP.width` / `MAP.height` | 本局地图尺寸（见第 6 节） |
-| `MAP.grid[y][x]` | 单字符地形；字符含义见第 6 节的图例与 ASCII 图 |
+| `MAP.width` / `MAP.height` | 本局地图尺寸（{{MAP_MIN_DIM}} ~ {{MAP_MAX_DIM}} 格，长方形合法；见第 6.1 节） |
+| `MAP.grid[y][x]` | 单字符地形；字符含义见第 6.2 节的字符表 |
 | `MAP.spawns` | 出生点数组，索引 = 座位号 - 1 |
-| `MAP.spawnsFor1v1` | （可选）1v1 时实际使用的出生点序号（1 基），例如 `[1,2]` |
-| `MAP.ammoDepots` / `MAP.fuelStations` / `MAP.depositPoints` | 弹药点 / 加油点 / 提交点的坐标数组 |
-| `MAP.resourceNodes` | `{id, x, y, kind, capacity, initial, regenEveryRounds}` 数组 |
+| `MAP.spawnsFor1v1` | （可选）1v1 用的两个出生点序号（1 基，缺省 `[1,3]`）；两个点**可能相邻也可能对角**，谁拿哪一个由引擎按种子分配 —— 一律以 `ctx.mySpawn` 为准 |
+| `MAP.ammoDepots` / `MAP.fuelStations` / `MAP.depositPoints` | 弹药点 / 加油点 / 提交点的坐标数组（**数量每张图都不同，可能只有一个**） |
+| `MAP.resourceNodes` | `{id, x, y, kind, capacity, initial, regenEveryRounds}` 数组，语义见第 6.4 节 |
 
 **RULES** —— 完整数值表，字段名即参数名，见第 7 节。
 
@@ -90,7 +99,7 @@
 
 ### 5.7 经济（关键：这是得分游戏，不是歼灭游戏）
 
-- 提交资源：站到提交点上执行 `deposit`，每单位 +`RULES.depositScorePerUnit` 分，载货上限 `RULES.cargoMax` → 单趟最高 +`cargoMax × depositScorePerUnit` 分。**提交点与资源点的相对位置决定了一张图的性格**（近端资源点安全但产出低，中心资源点产出高但所有人都会来），距离参考见第 6 节。
+- 提交资源：站到提交点上执行 `deposit`，每单位 +`RULES.depositScorePerUnit` 分，载货上限 `RULES.cargoMax` → 单趟最高 +`cargoMax × depositScorePerUnit` 分。**提交点与资源点的相对位置决定了一张图的性格**（近端资源点安全但产出低，中心资源点产出高但所有人都会来），而**每张图都不一样**：距离请在 `onInit` 里用 `API.pathFind` 实测（第 6.5 节）。
 - 采集：站在资源点上 `collect`，一次最多 `RULES.collectPerAction` 单位；资源点有容量与回复速度（每 `regenEveryRounds` 轮 +1 单位，见 `MAP.resourceNodes`），`remaining` 只在视野内可见。
 - 补弹：`RULES.ammoPrice` 分/发；加油：`RULES.fuelPricePer10` 分/10 燃油；移动 `RULES.moveFuelCost` 燃油/格；燃油耗尽后仍可移动，但每格扣 `RULES.emergencyMoveCost` 分（应急燃料，尽量避免）。
 - 死亡：-`RULES.deathPenalty` 分 + 停机 `RULES.respawnRounds` 轮 + 载货清零；击杀者 +`RULES.killReward` 分。
@@ -99,9 +108,9 @@
 ### 5.8 出生点与开局
 
 你出生在 `ctx.mySpawn`，初始 HP / 弹药 / 燃油见 `RULES`（燃油通常只够走 `fuelMax / moveFuelCost` 格，务必先规划补油）。
-出生点附近有弹药补给点和加油点（到各设施的最短步数见第 6 节的"距离参考"）。
-推荐开局：先加油（顺便把弹药补上），再去资源点。
-**你的脚本必须对 1v1（2 个出生点）和多人局都成立，禁止硬编码对手数量或出生点坐标**——出生点一律从 `ctx.mySpawn` / `MAP.spawns[seat-1]` 取。
+合规地图上，出生点附近一定有可用的弹药补给点与加油点（从出生点可达），但**具体几步要自己算**：`onInit` 有 1000ms 预算，先用 `API.pathFind` 把"我 → 最近加油点 / 最近弹药点 / 最近资源点 / 提交点"的距离或路径算出来再行动。
+推荐开局：先加油（顺便把弹药补上），再去资源点。**这张图可能只有 1 个提交点，也可能有多个；资源点可能全在中央，也可能贴着你的出生点。**
+**你的脚本必须对 1v1（2 个出生点）和多人局都成立，也必须对任意一张合规地图成立，禁止硬编码对手数量、尺寸、坐标或设施数量**——出生点一律从 `ctx.mySpawn` / `MAP.spawns[seat-1]` 取，其余目标点从 `MAP` 现取。
 
 ### 5.9 状态对象 state（onTurn 的入参）
 

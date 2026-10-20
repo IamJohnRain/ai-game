@@ -42,7 +42,7 @@
 ## 自己提交一份试试
 
 ```bash
-curl -s http://127.0.0.1:8787/api/task-doc -o task-doc.md     # 读任务书（也可 pnpm cli task-doc --map duel-01 --out task-doc.md）
+curl -s http://127.0.0.1:8787/api/task-doc -o task-doc.md     # 读任务书（也可 pnpm cli task-doc --out task-doc.md）
 # 让 Agent 照任务书写出 strategy.js 与 meta.json，然后：
 pnpm cli check  --file strategy.js                                # 本地自检（与上传闸门同一套流水线）
 pnpm cli pack   --file strategy.js --meta meta.json --out strategy.zip

@@ -85,7 +85,7 @@ GET  /api/tournaments/:id/report 赛事战报（Markdown）
 ## 5. 接口一览（对外）
 
 ```
-GET  /api/task-doc[?format=json][&mapId=]  任务书（免登录；Markdown 或 JSON；含端点与上限；默认 1v1 决斗图 duel-01）
+GET  /api/task-doc[?format=json]           任务书（免登录；Markdown 或 JSON；含端点与上限；**与地图无关**，只给通用地图规范）
 GET  /login                          登录页（免登录）
 POST /api/auth/login                 登录（用户名固定 JohnRyan）→ Set-Cookie 会话
 POST /api/auth/logout                登出（作废会话）

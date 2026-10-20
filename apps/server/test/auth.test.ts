@@ -106,9 +106,9 @@ test("免登录白名单：任务书、登录页、上传（上传另有一道�
     assert.equal(doc.statusCode, 200);
     assert.match(doc.body, /任务书/);
 
-    const docJson = await ctx.app.inject({ method: "GET", url: "/api/task-doc?format=json&mapId=duel-01" });
+    const docJson = await ctx.app.inject({ method: "GET", url: "/api/task-doc?format=json" });
     assert.equal(docJson.statusCode, 200);
-    assert.equal(docJson.json().mapId, "duel-01");
+    assert.equal(docJson.json().mapId, undefined, "任务书与地图无关：JSON 里不再有 mapId");
 
     const page = await ctx.app.inject({ method: "GET", url: "/login" });
     assert.equal(page.statusCode, 200);

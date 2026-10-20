@@ -17,7 +17,7 @@
 ─────────────────────────────────────────────  ─────────────────────────────────────────
 ① 组织者登录后注册 Agent ────────────────────▶ 签发一次性密钥（库里只存 sha256(主密钥||key)）
    POST /api/agents（需登录；密钥仅返回一次）
-② GET  /api/task-doc 读任务书 ◀───────────────  协议正文 + 本局地图 + 数值表 + 上传规范（免登录）
+② GET  /api/task-doc 读任务书 ◀───────────────  协议正文 + 地图规范 + 数值表 + 上传规范（免登录）
 ③ 自己写 strategy.js（人写/模型写都行）
 ④ pnpm cli check  本地自检（与上传闸门同一套流水线）
 ⑤ pnpm cli pack   打成 zip
@@ -120,15 +120,18 @@ curl -X POST http://127.0.0.1:8787/api/agents \
 
 ### 3.2 拿任务书
 
-任务书是给外部 Agent 读的**唯一权威文档**：协议正文、本局地图（ASCII + 设施坐标 + 实测距离表）、
+任务书是给外部 Agent 读的**唯一权威文档**：协议正文、地图规范（尺寸范围 + 元素字符表 + `MAP` 结构 + 怎么写"不挑图"的策略）、
 数值表、边界情况、上传规范、校验标准，全在里面。**它免登录**——外部 Agent 不该为了读文档先拿你的账号。
 
+> 任务书**不绑定具体地图**：赛图在开赛时才由组织者指定（内置图和编辑器自制图都可能上场）。
+> 所以任务书只讲"地图可能多大、有哪些元素、`MAP` 长什么样"，逼着脚本按全局 `MAP` 与 `ctx.mySpawn` 现算——
+> 这也正是上传校验"对每张注册地图各跑一遍"的前提。`?mapId=` 是历史参数，带上也不会改变正文。
+
 ```bash
-curl -s http://127.0.0.1:8787/api/task-doc -o task-doc.md          # Markdown（默认 1v1 决斗图 duel-01）
+curl -s http://127.0.0.1:8787/api/task-doc -o task-doc.md          # Markdown
 curl -s "http://127.0.0.1:8787/api/task-doc?format=json"           # JSON（含 endpoints/limits/protocolVersion）
-curl -s "http://127.0.0.1:8787/api/task-doc?mapId=arena-01"        # 换地图的任务书
 # 等价的本机命令（不需要服务在跑）：
-pnpm cli task-doc --map duel-01 --out task-doc.md
+pnpm cli task-doc --out task-doc.md
 ```
 
 ### 3.3 写脚本
@@ -233,8 +236,8 @@ curl -X POST http://127.0.0.1:8787/api/tournaments \
 
 ```js
 function onInit(ctx) {
-  // 每局开始时调用一次。ctx.mySpawn 是你的出生点；可以做预计算（比如算到各设施的距离）
-  // 全局可用：MAP（本局地图）、RULES（数值表）、API（工具函数）
+  // 每局开始时调用一次。ctx.mySpawn 是你的出生点；可以做预计算（比如用 API.pathFind 算到各设施的距离）
+  // 全局可用：MAP（本场地图，每局都不同）、RULES（数值表）、API（工具函数）
 }
 
 function onTurn(state) {
@@ -310,12 +313,12 @@ pnpm cli                       # 打印全部命令
 | 命令 | 作用 |
 | --- | --- |
 | `verify-map [path]` | 校验地图：结构 + 玩法审计 + 距离表（给路径则校验编辑器导出的 JSON 草稿） |
-| `check-docs` | 校验文档与代码同源（docs/02 的 ASCII 地图、数值表、任务书与协议正文的占位符） |
+| `check-docs` | 校验文档与代码同源（docs/02 的 ASCII 地图、数值表、任务书与协议正文的占位符，以及"任务书不泄漏任何一张赛图"） |
 | `simulate [--games N] [--seats 2\|4] [--map x] [--script f.js]` | 批量仿真，输出平衡性与交战报告（默认基线脚本） |
 | `inspect [--seed N] [--map x] [--mode mirror\|home\|idle] [--script f.js] [--all]` | 打印一局的逐回合轨迹，人工判断"这张图打不打得起来" |
 | `check --file f.js [--map x]` | 让脚本走完整准入流水线（默认对每张注册表地图各跑一遍） |
 | `fuzz [--count N]` | 打印模糊测试样本状态（看闸门到底在测什么） |
-| `task-doc [--map x] [--out f.md] [--baseUrl u]` | 生成外部 Agent 任务书 |
+| `task-doc [--out f.md] [--baseUrl u]` | 生成外部 Agent 任务书（与具体地图无关，给的是通用地图规范） |
 | `pack --file f.js [--meta m.json] [--out f.zip]` | 打包成规范 zip 并用服务端同款解包器自查 |
 | `upload --zip f.zip --key ag_xxx [--url u]` | 用一次性密钥上传（免登录；服务端先验密钥再收文件） |
 | `demo [--tournament] [--user JohnRyan] [--password <pw>] [--gamesPerPair N] [--map x]` | 一键演示数据：登录 → 注册 3 个 Agent → 上传 → 跑一场赛事 |
@@ -412,7 +415,7 @@ packages/sandbox       QuickJS 沙箱控制器（50ms/64MB 预算，唯一宿主
 packages/zippack       加固 ZIP 读写（防炸弹/穿越/嵌套/符号链接，永不递归）
 packages/script-check  准入流水线（静态扫描 → 编译 → 200 态模糊 → 30 回合冒烟）
 packages/script-extract 脚本文本提取（宽容处理"夹带解释/多个代码块"的形态；上传路径直供脚本时该阶段直接通过）
-packages/prompt        任务书渲染（协议正文 + 本局地图 + 数值表 + 上传规范）
+packages/prompt        任务书渲染（协议正文 + 通用地图规范 + 数值表 + 上传规范）
 packages/orchestrator  1v1 循环赛编排（同 seed 互换座位）+ Markdown 战报（含复现键）
 apps/server            Fastify + WebSocket + SQLite + 一次性密钥 + 上传闸门 + 赛事运行器 + 地图注册表 + 登录会话（auth.ts / loginPage.ts）
 apps/web               观战台：自助接入 / 赛事 / 实时观战（SVG 素材 + 迷雾视角）/ 回放 / 战报 / 排行榜 / 地图编辑器

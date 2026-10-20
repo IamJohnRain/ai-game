@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { DEFAULT_MAP_1V1, DEFAULT_RULESET, type GameMap, type Ruleset } from "@ai-game/protocol";
+import { DEFAULT_MAP_1V1, DEFAULT_RULESET, type Ruleset } from "@ai-game/protocol";
 import { checkScript } from "@ai-game/script-check";
 import { DEFAULT_UPLOAD_LIMITS_PUBLIC, SCRIPT_PROTOCOL_VERSION, renderTaskDoc, TASK_DOC_VERSION } from "@ai-game/prompt";
 import { createZip, DEFAULT_UPLOAD_LIMITS, readZip, type ZipRejectReason } from "@ai-game/zippack";
@@ -65,15 +65,16 @@ export function registerExternalRoutes(app: FastifyInstance, deps: ExternalRoute
   );
 
   // ---------------- 任务书 ----------------
-  // 任务书与"地图"绑定：外部 Agent 要针对某张具体地图写脚本，所以默认发 1v1 决斗图，
-  // 也可以用 ?mapId= 取别的图（赛事发起时可以指定地图，双方拿到的任务书必须与实际赛图一致）。
-  type TaskDoc = { version: string; protocolVersion: string; mapId: string; markdown: string; limits: unknown; endpoints: unknown };
+  // 任务书**不绑定地图**：赛图由组织者在开赛时从注册表里选（内置 + 自定义），
+  // 而任务书只给"通用地图规范"（尺寸范围、元素与字符表、MAP 结构、资源点语义）。
+  // 因此各张地图拿到的是同一份正文 —— 这正是"脚本必须按 MAP 现算"的前提，
+  // 也与我们"对每张注册地图各跑一遍校验"的准入策略一致。
+  type TaskDoc = { version: string; protocolVersion: string; markdown: string; limits: unknown; endpoints: unknown };
   const taskDocCache = new Map<string, TaskDoc>();
-  const taskDoc = (baseUrl: string, map: GameMap): TaskDoc => {
-    const hit = taskDocCache.get(map.mapId);
+  const taskDoc = (baseUrl: string): TaskDoc => {
+    const hit = taskDocCache.get(baseUrl);
     if (hit) return hit;
     const doc = renderTaskDoc({
-      map,
       rules: DEFAULT_RULESET,
       protocolCorePath: PROTOCOL_CORE,
       taskDocTemplatePath: TASK_DOC_TEMPLATE,
@@ -84,18 +85,11 @@ export function registerExternalRoutes(app: FastifyInstance, deps: ExternalRoute
       turnBudgetMs: 50,
     });
     const entry: TaskDoc = {
-      version: doc.version, protocolVersion: doc.protocolVersion, mapId: map.mapId,
+      version: doc.version, protocolVersion: doc.protocolVersion,
       markdown: doc.markdown, limits: doc.limits, endpoints: doc.endpoints,
     };
-    taskDocCache.set(map.mapId, entry);
+    taskDocCache.set(baseUrl, entry);
     return entry;
-  };
-
-  /** 取/校验 ?mapId=（缺省 = 1v1 默认图） */
-  const mapOfQuery = (req: FastifyRequest): GameMap | null => {
-    const raw = (req.query as { mapId?: string })?.mapId;
-    if (raw === undefined || raw === "") return registry.get(DEFAULT_MAP_1V1);
-    return registry.get(raw);
   };
 
   const baseUrlOf = (req: FastifyRequest): string => {
@@ -105,17 +99,15 @@ export function registerExternalRoutes(app: FastifyInstance, deps: ExternalRoute
   };
 
   app.get("/api/task-doc", async (req, reply) => {
-    const map = mapOfQuery(req);
-    if (!map) return fail(reply, 404, `未知地图 ${(req.query as { mapId?: string }).mapId}（可用：${registry.ids().join(", ")}）`);
-    const doc = taskDoc(baseUrlOf(req), map);
+    const doc = taskDoc(baseUrlOf(req));
     if ((req.query as { format?: string }).format === "json") {
       return {
-        version: doc.version, protocolVersion: doc.protocolVersion, mapId: doc.mapId,
+        version: doc.version, protocolVersion: doc.protocolVersion,
         markdown: doc.markdown, endpoints: doc.endpoints, limits: doc.limits,
       };
     }
     reply.header("Content-Type", "text/markdown; charset=utf-8");
-    reply.header("Content-Disposition", `inline; filename="ai-game-task-doc-${doc.version}-${doc.mapId}.md"`);
+    reply.header("Content-Disposition", `inline; filename="ai-game-task-doc-${doc.version}.md"`);
     return doc.markdown;
   });
 
@@ -141,8 +133,8 @@ export function registerExternalRoutes(app: FastifyInstance, deps: ExternalRoute
       agent,
       key, // 仅此一次返回明文；库里只存哈希
       protocolVersion: SCRIPT_PROTOCOL_VERSION,
-      taskDocMapId: DEFAULT_MAP_1V1,
-      taskDocUrl: `${base}/api/task-doc?mapId=${DEFAULT_MAP_1V1}`,
+      // 任务书与地图无关（赛图开赛时才定），给的是一条固定 URL，读到的就是最新版
+      taskDocUrl: `${base}/api/task-doc`,
       uploadUrl: `${base}/api/upload`,
       limits: DEFAULT_UPLOAD_LIMITS_PUBLIC,
     };

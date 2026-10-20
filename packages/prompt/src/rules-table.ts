@@ -43,15 +43,3 @@ export function rulesetToMarkdownTable(rules: Ruleset): string {
   }
   return lines.join("\n");
 }
-
-/** 任务书里的紧凑地图 JSON（去掉图例等面向人阅读的重复字段，减小体积） */
-export function compactMapJson(map: unknown): string {
-  const m = map as Record<string, unknown>;
-  const keep = [
-    "mapId", "version", "width", "height", "grid", "spawns", "spawnsFor1v1",
-    "ammoDepots", "fuelStations", "resourceNodes", "depositPoints", "distanceReference_P1",
-  ];
-  const out: Record<string, unknown> = {};
-  for (const k of keep) if (m[k] !== undefined) out[k] = m[k];
-  return JSON.stringify(out, null, 1);
-}

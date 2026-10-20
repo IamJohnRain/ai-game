@@ -155,7 +155,7 @@ export type AgentRegisterResult = {
   key: string;
   /** 脚本协议版本（任务书 §5 协议正文的版本号） */
   protocolVersion: string;
-  taskDocMapId: string;
+  /** 任务书 URL（与地图无关：赛图开赛时才确定，任务书只给通用地图规范） */
   taskDocUrl: string;
   uploadUrl: string;
   limits: UploadLimits;
@@ -166,7 +166,6 @@ export type AgentReissueResult = { agent: Agent; key: string };
 export type TaskDocJson = {
   version: string;
   protocolVersion: string;
-  mapId: string;
   markdown: string;
   endpoints: { register: string; upload: string; taskDoc: string; tournaments: string };
   limits: UploadLimits;
@@ -391,9 +390,8 @@ export const api = {
   reissueAgentKey: (id: string) =>
     request<AgentReissueResult>("POST", `/agents/${encodeURIComponent(id)}/reissue`),
   deleteAgent: (id: string) => request<{ ok: true }>("DELETE", `/agents/${encodeURIComponent(id)}`),
-  getTaskDoc: (mapId?: string) => requestText(mapId ? `/task-doc?mapId=${encodeURIComponent(mapId)}` : "/task-doc"),
-  getTaskDocJson: (mapId?: string) =>
-    request<TaskDocJson>("GET", mapId ? `/task-doc?mapId=${encodeURIComponent(mapId)}&format=json` : "/task-doc?format=json"),
+  getTaskDoc: () => requestText("/task-doc"),
+  getTaskDocJson: () => request<TaskDocJson>("GET", "/task-doc?format=json"),
 
   // —— 赛事（1v1 循环赛）
   listTournaments: () => request<{ tournaments: TournamentSummary[] }>("GET", "/tournaments"),

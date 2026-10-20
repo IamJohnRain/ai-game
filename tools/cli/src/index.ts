@@ -146,12 +146,13 @@ function cmdCheckDocs(): void {
   const taskDocTpl = readFileSync(TASK_DOC_TEMPLATE_PATH, "utf8");
   const core = readFileSync(PROTOCOL_CORE, "utf8");
   const taskDocPlaceholders = [
-    "{{TASK_DOC_VERSION}}", "{{RULESET_VERSION}}", "{{MAP_VERSION}}", "{{MAP_ID}}", "{{MAP_VERSION_NUM}}",
-    "{{MAP_ASCII}}", "{{MAP_JSON}}", "{{MAP_LEGEND}}", "{{DISTANCE_TABLE}}", "{{RULES_TABLE}}", "{{BASELINE_EXAMPLE}}",
-    "{{REGISTER_URL}}", "{{UPLOAD_URL}}", "{{TASK_DOC_URL}}", "{{ZIP_MAX}}", "{{MAX_LINES}}", "{{PROTOCOL_CORE}}",
+    "{{TASK_DOC_VERSION}}", "{{RULESET_VERSION}}", "{{API_VERSION}}", "{{PROMPT_VERSION}}", "{{PROTOCOL_CORE}}",
+    "{{CTX_JSON}}", "{{MAP_MIN_DIM}}", "{{MAP_MAX_DIM}}", "{{TILE_TABLE}}", "{{MAP_SPEC_EXAMPLE}}",
+    "{{RULES_TABLE}}", "{{BASELINE_EXAMPLE}}",
+    "{{REGISTER_URL}}", "{{UPLOAD_URL}}", "{{TASK_DOC_URL}}", "{{ZIP_MAX}}", "{{MAX_LINES}}",
   ];
   for (const ph of taskDocPlaceholders) {
-    if (!taskDocTpl.includes(ph)) errors.push(`任务书模板缺少占位符 ${ph}`);
+    if (!taskDocTpl.includes(ph) && !core.includes(ph)) errors.push(`任务书模板与协议正文都没有占位符 ${ph}`);
   }
   // 协议正文只带"与脚本自身相关"的占位符；地图/数值由任务书第 6、7 节负责（避免一处数字两处维护）
   const corePlaceholders = ["{{CTX_JSON}}", "{{MAX_LINES}}", "{{PROMPT_VERSION}}"];
@@ -160,7 +161,35 @@ function cmdCheckDocs(): void {
   }
   // 正文里必须留下"去哪儿看地图/数值"的指针，否则换图/改数值时脚本作者会读不到最新信息
   for (const needle of ["第 6 节", "第 7 节"]) {
-    if (!core.includes(needle)) errors.push(`协议正文没有指向任务书 ${needle}（地图与数值表的出处）`);
+    if (!core.includes(needle)) errors.push(`协议正文没有指向任务书 ${needle}（地图规范与数值表的出处）`);
+  }
+
+  // 3b) 真渲染一遍任务书：占位符必须全部替换，且**不得泄漏任何一张赛图**。
+  //     任务书是"通用地图规范"——一旦把某张图的 id/地形写进去，脚本作者就会去背图，
+  //     与"脚本必须按 MAP 现算、校验对每张图各跑一遍"的设计意图相悖。
+  try {
+    const doc = renderTaskDoc({
+      rules: DEFAULT_RULESET,
+      protocolCorePath: PROTOCOL_CORE,
+      taskDocTemplatePath: TASK_DOC_TEMPLATE_PATH,
+      baselineScript: readFileSync(BASELINE_PATH, "utf8"),
+      serverBaseUrl: "http://127.0.0.1:8787",
+      limits: DEFAULT_UPLOAD_LIMITS_PUBLIC,
+      gamesPerPair: 2,
+      turnBudgetMs: 50,
+    });
+    const md = doc.markdown;
+    const leftover = md.match(/\{\{[A-Z_0-9]+\}\}/g);
+    if (leftover) errors.push(`任务书渲染后有未替换的占位符：${[...new Set(leftover)].join(", ")}`);
+    for (const [mapId, map] of Object.entries(BUILTIN_MAPS)) {
+      if (md.includes(mapId)) errors.push(`任务书正文泄漏了地图 id ${mapId}（任务书必须与地图无关）`);
+      if (map.grid.some((row) => md.includes(row))) errors.push(`任务书正文泄漏了 ${mapId} 的地形（任务书必须与地图无关）`);
+    }
+    for (const need of ["字符表", "地图规范", "MAP.spawnsFor1v1"]) {
+      if (!md.includes(need)) errors.push(`任务书正文缺少"不挑图"必需的段落/字段：${need}`);
+    }
+  } catch (err) {
+    errors.push(`任务书渲染失败：${err instanceof Error ? err.message : String(err)}`);
   }
 
   // 4) 协议正文里的规则数值必须**引用 RULES 字段**而不是写死数字。
@@ -298,10 +327,10 @@ async function cmdCheck(): Promise<void> {
 }
 
 // ---------------------------------------------------------------- task-doc（外部 Agent 任务书）
+// 任务书与地图无关：只给"通用地图规范"（尺寸范围/元素字符表/MAP 结构），赛图由赛事组织者开赛时指定。
 function cmdTaskDoc(): void {
   const serverBaseUrl = arg("baseUrl", "http://127.0.0.1:8787")!;
   const doc = renderTaskDoc({
-    map: loadMap(arg("map", DEFAULT_MAP_1V1)!),
     rules: loadRules(),
     protocolCorePath: PROTOCOL_CORE,
     taskDocTemplatePath: TASK_DOC_TEMPLATE_PATH,
@@ -498,8 +527,8 @@ function usage(): void {
   fuzz [--count 3]                  打印模糊测试样本状态
 
 对外 Agent 流程（外部 Agent 只需这三条）：
-  task-doc [--map duel-01] [--out task-doc.md] [--baseUrl http://host:8787]
-                                    生成"外部 Agent 任务书"（协议/地图/数值/上传规范/校验标准）
+  task-doc [--out task-doc.md] [--baseUrl http://host:8787]
+                                    生成"外部 Agent 任务书"（协议/地图规范/数值/上传规范/校验标准；与具体地图无关）
   pack --file strategy.js [--meta meta.json] [--out strategy.zip]
                                     打包成规范 zip 并用服务端同款解包器自查
   upload --zip strategy.zip --key ag_xxx [--url .../api/upload]

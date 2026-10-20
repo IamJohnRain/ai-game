@@ -5,6 +5,27 @@ import type { Pos } from "./pos.ts";
 export const TileCharSchema = z.enum([".", "#", "~", "f", "S", "A", "B", "G", "R", "D"]);
 export type TileChar = z.infer<typeof TileCharSchema>;
 
+/** 地图尺寸硬约束：编辑器审计、任务书、上传校验共用同一组数字（改这里就是改全局约定） */
+export const MAP_MIN_DIM = 9;
+export const MAP_MAX_DIM = 64;
+
+/**
+ * 地形/设施字符的权威含义（任务书 §6 的字符表、编辑器图例、脚本作者的唯一参考）。
+ * 只写"字符 + 元素 + 与 MAP 哪个坐标数组对应"，具体数值一律引用 RULES，避免两处维护。
+ */
+export const TILE_LEGEND: Record<TileChar, string> = {
+  ".": "平地：可通行、不挡视线",
+  "#": "墙：阻挡移动，也阻挡视线",
+  "~": "水：阻挡移动，但不挡视线（可以隔水对射）",
+  f: "森林：可通行、挡视线；站在里面受击伤害按 `RULES.forestDamageMult` 折减，且距离超过 `RULES.forestStealthRadius` 不会被看见",
+  S: "出生点：`MAP.spawns` 里的坐标（数组下标 = 座位号 - 1）",
+  A: "弹药补给点：`MAP.ammoDepots`（`loadAmmo` 装弹，扣 `RULES.ammoPrice` 分/发）",
+  B: "弹药补给点：与 `A` 完全等价（不同地图用了不同字符，脚本要同时认这两个）",
+  G: "加油点：`MAP.fuelStations`（`refuel` 加油，扣分见 `RULES.fuelPricePer10`）",
+  R: "资源点：`MAP.resourceNodes`（`collect` 采集，唯一的收入来源）",
+  D: "资源提交点：`MAP.depositPoints`（`deposit` 交资源换分）",
+};
+
 export const PosSchema = z.object({ x: z.number().int().nonnegative(), y: z.number().int().nonnegative() });
 
 export const ResourceNodeSchema = z.object({

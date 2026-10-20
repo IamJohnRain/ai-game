@@ -8,7 +8,9 @@ import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { deflateRawSync } from "node:zlib";
 import { createZip } from "@ai-game/zippack";
-import { DEFAULT_MAP_1V1, DEFAULT_MAP_MULTI, BUILTIN_MAPS } from "@ai-game/protocol";
+import { DEFAULT_MAP_1V1, DEFAULT_MAP_MULTI, DEFAULT_RULESET, BUILTIN_MAPS, MAP_MIN_DIM, MAP_MAX_DIM, TileCharSchema, validateMap } from "@ai-game/protocol";
+import { auditMap } from "@ai-game/engine";
+import { MAP_SPEC_EXAMPLE } from "@ai-game/prompt";
 import { loadConfig, type ServerConfig } from "../src/config.ts";
 import { Store } from "../src/store.ts";
 import { TournamentRunner } from "../src/tournaments.ts";
@@ -75,7 +77,7 @@ async function register(ctx: Ctx, overrides: Record<string, unknown> = {}) {
   assert.equal(res.statusCode, 200, res.body);
   return res.json() as {
     agent: { id: string; keyMasked: string; status: string };
-    key: string; taskDocUrl: string; taskDocMapId: string; uploadUrl: string;
+    key: string; taskDocUrl: string; uploadUrl: string;
     limits: { zipMaxBytes: number; maxUploadAttempts: number; maxEntries: number; maxRatio: number; maxScriptLines: number };
   };
 }
@@ -106,8 +108,8 @@ test("注册：字段齐全、密钥只回一次、库里不存明文、列表�
     assert.ok(reg.key.startsWith("ag_") && reg.key.length === 35, `密钥格式应为 ag_ + 32 hex，实际 ${reg.key}`);
     assert.equal(reg.agent.status, "registered");
     assert.equal(reg.agent.keyMasked, `${reg.key.slice(0, 5)}****${reg.key.slice(-4)}`);
-    assert.ok(reg.taskDocUrl.includes("/api/task-doc?mapId="), `任务书 URL 应带地图，实际 ${reg.taskDocUrl}`);
-    assert.equal(reg.taskDocMapId, DEFAULT_MAP_1V1, "注册时给外部 Agent 的任务书默认是 1v1 决斗图");
+    assert.ok(reg.taskDocUrl.endsWith("/api/task-doc"), `任务书 URL 与地图无关，实际 ${reg.taskDocUrl}`);
+    assert.equal((reg as unknown as Record<string, unknown>)["taskDocMapId"], undefined, "任务书不再绑定某张默认地图");
     assert.ok(reg.uploadUrl.endsWith("/api/upload"));
     assert.equal(reg.limits.zipMaxBytes, 200 * 1024);
     assert.equal(reg.limits.zipMaxBytes, 204800);
@@ -255,33 +257,49 @@ test("重新签发密钥：旧密钥失效、新密钥可用", async () => {
   } finally { await ctx.close(); }
 });
 
-test("任务书：Markdown 含协议/地图/数值/上传规范；JSON 形态给出端点与上限", async () => {
+test("任务书：不指定具体地图（只给通用地图规范），Markdown 含协议/规范/数值/上传规范；JSON 形态给出端点与上限", async () => {
   const ctx = await boot();
   try {
     const md = await ctx.req({ method: "GET", url: "/api/task-doc" });
     assert.equal(md.statusCode, 200);
     assert.match(md.headers["content-type"] as string, /markdown/);
     const text = md.body;
-    for (const probe of ["外部 Agent 任务书", "function onTurn(state)", "API.pathFind", "strategy.js", "200 KB", "ZIP", "自查清单", "1v1 循环赛"]) {
+    for (const probe of [
+      "外部 Agent 任务书", "function onTurn(state)", "API.pathFind", "strategy.js", "200 KB", "ZIP", "自查清单", "1v1 循环赛",
+      "地图规范", "字符表", "MAP.spawnsFor1v1", "不挑图",
+    ]) {
       assert.ok(text.includes(probe), `任务书应包含：${probe}`);
     }
     assert.equal(/\{\{[A-Z_0-9]+\}\}/.test(text), false, "不得残留未替换的占位符");
 
+    // 关键：正文里不得出现任何一张赛图（id 或地形），否则模型会去"背图"，与"不挑图"的设计意图相悖
+    for (const [mapId, map] of Object.entries(BUILTIN_MAPS)) {
+      assert.equal(text.includes(mapId), false, `任务书不应出现地图 id：${mapId}`);
+      for (const row of map.grid.slice(0, 3)) {
+        assert.equal(text.includes(row), false, `任务书不应出现 ${mapId} 的地形行：${row}`);
+      }
+    }
+
+    // 通用规范必须真的写清楚，且尺寸/字符来自 protocol（改引擎就是改任务书）
+    assert.ok(text.includes(`${MAP_MIN_DIM} ~ ${MAP_MAX_DIM}`), `任务书应写明尺寸范围 ${MAP_MIN_DIM} ~ ${MAP_MAX_DIM}`);
+    for (const c of TileCharSchema.options) assert.ok(text.includes(`\`${c}\``), `字符表应列出字符 ${c}`);
+    assert.ok(text.includes(MAP_SPEC_EXAMPLE.grid[2]!), "任务书应包含 MAP 结构示例（字段形状示意）");
+
+    // 结构示例本身必须是合法地图：不能教用户一个过不了校验的形状
+    assert.deepEqual(validateMap(MAP_SPEC_EXAMPLE), [], "任务书里的 MAP 结构示例必须是合法地图");
+    assert.deepEqual(auditMap(MAP_SPEC_EXAMPLE, DEFAULT_RULESET).errors, [], "结构示例也应通过玩法审计的硬性判据");
+
     const json = (await ctx.req({ method: "GET", url: "/api/task-doc?format=json" })).json();
-    assert.equal(json.version, "v1.0");
-    assert.equal(json.mapId, DEFAULT_MAP_1V1, "任务书默认给 1v1 决斗图");
+    assert.equal(json.version, "v1.1");
+    assert.equal(json.mapId, undefined, "任务书 JSON 不应再带 mapId（任务书与地图无关）");
     assert.match(json.endpoints.upload, /\/api\/upload$/);
     assert.equal(json.limits.zipMaxBytes, 204800);
     assert.ok(json.markdown.length > 10_000);
-    assert.ok(json.markdown.includes("duel-01"), "任务书正文必须写明实际地图");
 
-    // 显式指定另一张地图：正文与 mapId 都要跟着换
-    const other = (await ctx.req({ method: "GET", url: `/api/task-doc?mapId=${DEFAULT_MAP_MULTI}&format=json` })).json();
-    assert.equal(other.mapId, DEFAULT_MAP_MULTI);
-    assert.ok(other.markdown.includes(DEFAULT_MAP_MULTI) && !other.markdown.includes("duel-01"), "换图后正文不应再出现另一张图");
-    // 未知地图 → 404
-    const bad = await ctx.req({ method: "GET", url: "/api/task-doc?mapId=nope" });
-    assert.equal(bad.statusCode, 404);
+    // 旧链接（?mapId=xxx）继续可用，但正文与指定哪张图无关：一字不差
+    const legacy = await ctx.req({ method: "GET", url: `/api/task-doc?mapId=${DEFAULT_MAP_MULTI}` });
+    assert.equal(legacy.statusCode, 200, "带 ?mapId= 的旧链接不应 404");
+    assert.equal(legacy.body, text, "任务书与地图无关：换 mapId 拿到的正文必须完全相同");
   } finally { await ctx.close(); }
 });
 

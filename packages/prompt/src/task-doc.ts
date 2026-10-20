@@ -1,12 +1,19 @@
 // packages/prompt/src/task-doc.ts —— 外部 Agent 任务书渲染
 // 关键设计：协议正文来自 docs/prompts/protocol-core.md（**脚本协议的唯一真相源**），
-// 任务书模板只负责"流程 / 上传规范 / 本局地图 / 校验标准"，两者拼在一起就是外部 Agent 需要的全部信息。
+// 任务书模板只负责"流程 / 上传规范 / 地图规范 / 校验标准"，两者拼在一起就是外部 Agent 需要的全部信息。
 // 平台侧的上传闸门、静态扫描禁用清单、数值表都引用同一份来源，因此不会出现"文档说一套、代码做一套"。
+//
+// 地图部分刻意**不绑定具体地图**：赛事可以用任意合规地图（内置 + 组织者自制），赛图在开赛时才确定。
+// 任务书只给"地图规范"（尺寸范围、元素与字符、MAP 结构、资源点语义），逼着脚本按 MAP 现算，
+// 而不是把某张图的坐标写死——这与上传校验"对每张注册地图各跑一遍"是同一个设计意图。
 import { readFileSync } from "node:fs";
-import { API_VERSION, renderAscii, type GameMap, type Pos, type Ruleset } from "@ai-game/protocol";
-import { compactMapJson, rulesetToMarkdownTable } from "./rules-table.ts";
+import {
+  API_VERSION, MAP_MAX_DIM, MAP_MIN_DIM, TILE_LEGEND, TileCharSchema,
+  type GameMap, type Ruleset,
+} from "@ai-game/protocol";
+import { rulesetToMarkdownTable } from "./rules-table.ts";
 
-export const TASK_DOC_VERSION = "v1.0";
+export const TASK_DOC_VERSION = "v1.1";
 
 /** 脚本协议版本：协议正文（task-doc §5）任何影响脚本行为的改动都必须升这个号 */
 export const SCRIPT_PROTOCOL_VERSION = "p1.0";
@@ -29,11 +36,7 @@ export const DEFAULT_UPLOAD_LIMITS_PUBLIC: UploadLimitsPublic = {
   maxUploadAttempts: 10,
 };
 
-/** 任务书里给外部 Agent 看的"到各关键位置多少步"，由调用方用寻路实测后传入（可缺省） */
-export type DistanceReference = Record<string, number>;
-
 export interface TaskDocOptions {
-  map: GameMap;
   rules: Ruleset;
   /** 协议正文（docs/prompts/protocol-core.md）与任务书模板（docs/prompts/task-doc.template.md）的路径 */
   protocolCorePath: string;
@@ -45,8 +48,6 @@ export interface TaskDocOptions {
   gamesPerPair?: number;
   turnBudgetMs?: number;
   maxLines?: number;
-  /** 距离参考表；缺省时用地图自带的 distanceReference_P1 */
-  distances?: DistanceReference;
 }
 
 export interface RenderedTaskDoc {
@@ -69,31 +70,45 @@ function fill(text: string, vars: Record<string, string>): string {
   return text.replace(/\{\{([A-Z_0-9]+)\}\}/g, (m, key: string) => (vars[key] !== undefined ? vars[key]! : m));
 }
 
-/** 地图图例 → Markdown 表（自定义地图的图例由编辑器生成） */
-function legendTable(map: GameMap): string {
-  const legend = map.legend ?? {};
-  const chars = Object.keys(legend);
-  if (chars.length === 0) return "（本图未单独声明图例，按协议正文 §5.4.2 的通用字符表理解）";
-  return ["| 字符 | 含义 |", "| --- | --- |", ...chars.map((c) => `| \`${c}\` | ${legend[c]!.replace(/\|/g, "\\|")} |`)].join("\n");
-}
-
-const DISTANCE_LABELS: Record<string, string> = {
-  spawn_to_ammoDepot: "出生点 → 最近弹药补给点",
-  spawn_to_fuelStation: "出生点 → 最近加油点",
-  spawn_to_homeResourceNode: "出生点 → 最近资源点（前哨）",
-  spawn_to_centerResourceNode: "出生点 → 中央资源点（高收益）",
-  spawn_to_deposit: "出生点 → 提交点",
-  spawn_to_oppositeSpawn: "出生点 → 对手出生点",
-  centerResourceNode_to_deposit: "中央资源点 → 提交点",
+/**
+ * §6.3 的 `MAP` 结构示例。
+ * 它是一个**合法地图**（尺寸/镜像对称/设施声明/连通性都过 validateMap，测试里有断言），
+ * 但绝不是任何一场比赛的赛图：字段名与 `GameMap` 同源（少一个必需字段就编译不过），
+ * 数值只是示形状。尺寸取允许的最小值 9×9，真实赛图可能大得多。
+ */
+export const MAP_SPEC_EXAMPLE: GameMap = {
+  mapId: "<赛图 id>",
+  version: 1,
+  width: 9,
+  height: 9,
+  hint: "示例用图：字段形状示范，不是任何一场比赛的赛图",
+  symmetry: "mirror-x-y",
+  grid: [
+    "..#...#..",
+    "..#.B.#..",
+    ".S#.R.#S.",
+    "..#.D.#..",
+    "G.......G",
+    "..#.D.#..",
+    ".S#.R.#S.",
+    "..#.B.#..",
+    "..#...#..",
+  ],
+  spawns: [{ x: 1, y: 2 }, { x: 7, y: 2 }, { x: 1, y: 6 }, { x: 7, y: 6 }],
+  spawnsFor1v1: [1, 3],
+  ammoDepots: [{ x: 4, y: 1 }, { x: 4, y: 7 }],
+  fuelStations: [{ x: 0, y: 4 }, { x: 8, y: 4 }],
+  resourceNodes: [
+    { id: "R1", x: 4, y: 2, kind: "center", capacity: 10, initial: 10, regenEveryRounds: 6 },
+    { id: "R2", x: 4, y: 6, kind: "center", capacity: 10, initial: 10, regenEveryRounds: 6 },
+  ],
+  depositPoints: [{ x: 4, y: 3 }, { x: 4, y: 5 }],
 };
 
-/** 距离参考表：数值来自寻路实测（地图 JSON 的 distanceReference_P1 或调用方传入） */
-function distanceTable(map: GameMap, distances: DistanceReference | undefined): string {
-  const ref = distances ?? ((map.distanceReference_P1 ?? {}) as DistanceReference);
-  const entries = Object.entries(ref).filter(([, v]) => typeof v === "number");
-  if (entries.length === 0) return "（本图未提供距离参考）";
-  const rows = entries.map(([k, v]) => `| ${DISTANCE_LABELS[k] ?? k} | ${v} 步 |`);
-  return ["| 路线 | 最短步数 |", "| --- | --- |", ...rows].join("\n");
+/** §6.2 字符表：字符与含义都从 protocol 取，改引擎就是改任务书 */
+function tileTable(): string {
+  const rows = TileCharSchema.options.map((c) => `| \`${c}\` | ${TILE_LEGEND[c]} |`);
+  return ["| 字符 | 元素与含义 |", "| --- | --- |", ...rows].join("\n");
 }
 
 export function renderTaskDoc(opts: TaskDocOptions): RenderedTaskDoc {
@@ -108,20 +123,19 @@ export function renderTaskDoc(opts: TaskDocOptions): RenderedTaskDoc {
     requiresLogin: { register: true, upload: false, taskDoc: false, tournaments: true },
   };
 
-  const map = opts.map;
-  const mySpawn: Pos = map.spawns[0] ?? { x: 0, y: 0 };
-  // ctx 与真实比赛里 onInit(ctx) 拿到的对象同构，只是换成"第一人称示例"
+  // ctx 与真实比赛里 onInit(ctx) 拿到的对象同构（字段名来自 protocol 的 Ctx），只是换成"第一人称示例"：
+  // 注意 ctx 里**没有地图本身**——地图是全局 MAP（见协议正文 §5.4.2），mapVersion 只是个标签字符串。
   const ctxJson = JSON.stringify(
     {
-      schemaVersion: "1.0",
       apiVersion: API_VERSION,
       rulesetVersion: opts.rules.version,
-      mapId: map.mapId,
-      mapVersion: map.version,
+      mapVersion: "<赛图 id>@<版本>",
+      matchId: "<本场比赛 id>",
       seat: 1,
-      mySpawn,
-      playerCount: 2,
+      playerName: "<你的 Agent 名称>",
       seed: 0,
+      mySpawn: MAP_SPEC_EXAMPLE.spawns[0]!,
+      playerCount: 2,
     },
     null,
     2,
@@ -130,17 +144,14 @@ export function renderTaskDoc(opts: TaskDocOptions): RenderedTaskDoc {
   const vars: Record<string, string> = {
     TASK_DOC_VERSION,
     RULESET_VERSION: opts.rules.version,
-    MAP_VERSION: `${map.mapId}@${map.version}`,
-    MAP_ID: map.mapId,
-    MAP_VERSION_NUM: String(map.version),
     API_VERSION,
     PROMPT_VERSION: SCRIPT_PROTOCOL_VERSION,
     PROTOCOL_CORE: "",
     CTX_JSON: ctxJson,
-    MAP_ASCII: renderAscii(map),
-    MAP_JSON: compactMapJson(map),
-    MAP_LEGEND: legendTable(map),
-    DISTANCE_TABLE: distanceTable(map, opts.distances),
+    MAP_MIN_DIM: String(MAP_MIN_DIM),
+    MAP_MAX_DIM: String(MAP_MAX_DIM),
+    TILE_TABLE: tileTable(),
+    MAP_SPEC_EXAMPLE: JSON.stringify(MAP_SPEC_EXAMPLE, null, 2),
     RULES_TABLE: rulesetToMarkdownTable(opts.rules),
     BASELINE_EXAMPLE: opts.baselineScript.trim(),
     REGISTER_URL: endpoints.register,
