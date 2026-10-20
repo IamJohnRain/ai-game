@@ -34,10 +34,12 @@ export function LeaderboardPage() {
         }
       >
         <p className="hint">
-          统计口径：同一模型（<code>modelId</code>）在多场比赛中的累计表现，按平均得分降序。<strong>脚本通过率</strong>
-          指该模型生成的脚本一次通过五阶段校验（提取 → 静态扫描 → 沙箱编译 → 模糊测试 → 冒烟对局）的比例；
-          <strong>平均无效动作</strong>是每场平均被判定的非法动作数（越低越好）。不同 ruleset / 脚本协议版本的成绩
-          不建议横向比较——版本变化会改变分值口径，跨版本对比请回到战报查看当时的 ruleset 版本。
+          统计口径：同一模型（<code>modelId</code>）在多场比赛中的累计表现，按平均得分降序。
+          <strong>平均分受对手强弱影响</strong>，要横向比较模型强弱请看「评测批次」页的 Bradley–Terry 评级（带置信区间）。
+          这里的<strong>过程分</strong>全部按每回合/每单位归一：<strong>AP 利用率</strong> = 1 − 无效动作率（浪费掉的行动力）、
+          <strong>每百回合提交</strong>（同样的时间能赚多少分）、<strong>补给占比</strong>（补给花费 / 得分）、
+          <strong>一次通过率</strong>（首次上传就通过的比例）、<strong>版本 / 自测</strong>（迭代与自测行为）。
+          不同 ruleset / 脚本协议版本的成绩不建议横向比较——版本变化会改变分值口径。
         </p>
 
         {error ? (
@@ -68,7 +70,13 @@ export function LeaderboardPage() {
                 <th>平均分</th>
                 <th>夺冠次数</th>
                 <th>脚本通过率</th>
-                <th>平均无效动作</th>
+                <th>一次通过率</th>
+                <th>AP 利用率</th>
+                <th>每百回合提交</th>
+                <th>补给占比</th>
+                <th>死杀差</th>
+                <th>决策 avg/max</th>
+                <th>版本 / 自测</th>
               </tr>
             </thead>
             <tbody>
@@ -80,7 +88,17 @@ export function LeaderboardPage() {
                   <td className="mono">{r.avgScore.toFixed(1)}</td>
                   <td>{r.wins}</td>
                   <td>{(r.scriptOkRate * 100).toFixed(0)}%</td>
-                  <td>{r.avgInvalidActions.toFixed(2)}</td>
+                  <td>{r.firstTryRate === null || r.firstTryRate === undefined ? "-" : `${(r.firstTryRate * 100).toFixed(0)}%`}</td>
+                  <td>{(1 - r.avgInvalidRate) * 100 > 0 ? ((1 - r.avgInvalidRate) * 100).toFixed(2) : "100.00"}%</td>
+                  <td>{r.avgUnitsPer100.toFixed(1)}</td>
+                  <td>{r.avgSupplyShare.toFixed(2)}</td>
+                  <td>{r.avgKillDeathDiff}</td>
+                  <td className="mono small">
+                    {r.avgDecisionMs.toFixed(2)}/{r.maxDecisionMs.toFixed(1)}ms
+                  </td>
+                  <td className="small">
+                    {r.avgRevisions === null ? "-" : r.avgRevisions} / {r.avgPracticeRuns === null ? "-" : r.avgPracticeRuns}
+                  </td>
                 </tr>
               ))}
             </tbody>

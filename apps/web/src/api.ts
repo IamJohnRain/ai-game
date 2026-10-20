@@ -58,6 +58,19 @@ export type LeaderboardRow = {
   scriptOkRate: number;
   avgInvalidActions: number;
   avgStrikes: number;
+  /** 过程分（docs/08 §4.1）：全部按每回合/每单位归一，跨局数与地图可比 */
+  avgInvalidRate: number;
+  avgEmergencyRate: number;
+  avgUnitsPer100: number;
+  avgKillDeathDiff: number;
+  avgDecisionMs: number;
+  maxDecisionMs: number;
+  avgSupplyShare: number;
+  disqualifiedRate: number;
+  /** 与 agents 关联的字段：老数据/已删除 Agent 时为 null */
+  firstTryRate: number | null;
+  avgRevisions: number | null;
+  avgPracticeRuns: number | null;
 };
 
 export type MapListItem = {
