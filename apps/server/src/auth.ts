@@ -209,6 +209,8 @@ const PUBLIC_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ["GET", "/api/task-doc"],
   ["HEAD", "/api/task-doc"],
   ["POST", "/api/upload"],
+  // 练习通道：与上传同属"外部 Agent 免登录"入口（自己用一次性密钥把关，见 practice.ts）
+  ["POST", "/api/practice"],
   ["GET", "/favicon.ico"],
 ];
 

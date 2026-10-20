@@ -21,6 +21,8 @@ export interface TournamentOptions {
   agents: TournamentAgent[];
   /** 每一对打几局（默认 2 = 双方各一次先手/出生点） */
   gamesPerPair?: number;
+  /** 每局结束后问一次：返回 true 则停止后续对局（已完成的照常计入）。用于"停止批次"与长批次的响应性 */
+  shouldStop?: () => boolean;
   onMatchStart?: (info: { index: number; total: number; pairLabel: string; agents: { seat: number; id: string; agentName: string }[] }) => void;
   onMatchFinished?: (info: {
     index: number; matchId: string; result: MatchResult;
@@ -125,6 +127,12 @@ export async function runTournament(opts: TournamentOptions): Promise<Tournament
         ...(opts.onEvent ? { onEvent: (e: MatchEvent) => opts.onEvent!(matchId, e) } : {}),
       });
       controller.dispose();
+      // 让出宏任务队列：一次批次可能上百局，若不让出，HTTP 请求（进度轮询/观战）会被整体阻塞，
+      // 发起批次的响应也要等整批跑完才发得出去。
+      await new Promise((resolve) => setImmediate(resolve));
+      if (opts.shouldStop?.()) {
+        return { standings: [...standings.values()].map((s) => ({ ...s, rank: 0 })), matches: records, results };
+      }
 
       const agentOfSeat = new Map<number, TournamentAgent>([[1, firstAgent], [2, secondAgent]]);
       const st1 = result.stats[1]!;

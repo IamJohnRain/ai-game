@@ -269,6 +269,60 @@ test("批次参数校验：未知地图 / 未知变体 / Agent 不够 / 并发�
   } finally { await ctx.close(); }
 });
 
+test("发起批次必须立刻返回：跑对局不能堵住事件循环（线上曾阻塞 251s）", async () => {
+  const ctx = await boot();
+  try {
+    const a = await registerAndUpload(ctx, "玄武", baseline);
+    const b = await registerAndUpload(ctx, "朱雀", homeOnly);
+    const c = await registerAndUpload(ctx, "青龙", idleScript);
+    const t0 = Date.now();
+    const res = await ctx.req({
+      method: "POST", url: "/api/cohorts",
+      payload: {
+        agentIds: [a, b, c], masterSeed: 3, gamesPerPair: 1, includeCalibration: false,
+        legs: [
+          { name: "L1", mapId: "duel-01", maxRounds: 20, rulesVariant: "default", seeds: 1 },
+          { name: "L2", mapId: "duel-01", maxRounds: 20, rulesVariant: "default", seeds: 1 },
+          { name: "L3", mapId: "arena-01", maxRounds: 20, rulesVariant: "default", seeds: 1 },
+        ],
+      },
+    });
+    const elapsed = Date.now() - t0;
+    assert.equal(res.statusCode, 200, res.body);
+    // 关键：响应必须在批次还在跑的时候就回来（不是等整批跑完）
+    assert.ok(elapsed < 2000, `发起批次应在 2s 内返回，实际 ${elapsed}ms`);
+    const id = (res.json() as { cohortId: string }).cohortId;
+    const running = ctx.store.getCohort(id)!;
+    assert.ok(["pending", "running"].includes(running.status), `响应回来时批次应还在跑，实际 ${running.status}`);
+    await waitCohort(ctx, id);
+  } finally { await ctx.close(); }
+});
+
+test("停止批次：当前 leg 跑完即止，状态 stopped，剩余 leg 不再启动", async () => {
+  const ctx = await boot();
+  try {
+    const a = await registerAndUpload(ctx, "玄武", baseline);
+    const b = await registerAndUpload(ctx, "朱雀", homeOnly);
+    const res = await ctx.req({
+      method: "POST", url: "/api/cohorts",
+      payload: {
+        agentIds: [a, b], masterSeed: 5, gamesPerPair: 1, includeCalibration: false,
+        legs: Array.from({ length: 6 }, (_, i) => ({ name: `L${i}`, mapId: "duel-01", maxRounds: 40, rulesVariant: "default", seeds: 1 })),
+      },
+    });
+    assert.equal(res.statusCode, 200, res.body);
+    const id = (res.json() as { cohortId: string }).cohortId;
+    const stop = await ctx.req({ method: "POST", url: `/api/cohorts/${id}/stop` });
+    assert.equal(stop.statusCode, 200, stop.body);
+    const cohort = await waitCohort(ctx, id);
+    assert.equal(cohort.status, "stopped", cohort.error ?? "");
+    const legs = ctx.store.cohortLegs(id);
+    assert.ok(legs.length < 6, `停止后不该把 6 条 leg 全跑完，实际跑了 ${legs.length} 条`);
+    // 已跑完的 leg 结果照常在（停不是白停）
+    assert.ok(legs.some((l) => l.status === "finished"), "至少有一条 leg 跑完了");
+  } finally { await ctx.close(); }
+});
+
 test("批次并发上限：已有批次在跑时再发起 → 429", async () => {
   const ctx = await boot();
   try {

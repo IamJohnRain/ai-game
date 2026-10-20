@@ -54,20 +54,27 @@ export interface LaunchCohortInput {
 
 export const MAX_LEGS = 64;
 
-/** 默认 leg 计划：按注册表里实际存在的地图拼装（考察图没装就自动少几条） */
-export function defaultCohortLegs(registry: MapRegistry): CohortLegPlan[] {
+/**
+ * 默认 leg 计划：按注册表里实际存在的地图拼装（考察图没装就自动少几条）。
+ * **种子数按参与人数缩放**：对局总数 ≈ C(人数,2) × gamesPerPair × Σseeds，
+ * 6 个参与者时若每张图都跑 2 个种子就是 600+ 局（实测 250s）——人多了就少重复，人少了才多重复。
+ */
+export function defaultCohortLegs(registry: MapRegistry, participantCount = 2): CohortLegPlan[] {
   const has = (id: string) => Boolean(registry.get(id));
   const primary = has(DEFAULT_MAP_1V1) ? DEFAULT_MAP_1V1 : registry.ids()[0]!;
   const big = has(DEFAULT_MAP_MULTI) ? DEFAULT_MAP_MULTI : primary;
+  const heavy = participantCount >= 5;
+  const mainSeeds = heavy ? 2 : 3;
+  const otherSeeds = heavy ? 1 : 2;
   const legs: CohortLegPlan[] = [
-    { name: "主赛 150", mapId: primary, maxRounds: 150, rulesVariant: "default", seeds: 3 },
-    { name: "短局 60", mapId: primary, maxRounds: 60, rulesVariant: "default", seeds: 2 },
-    { name: "长局 300", mapId: big, maxRounds: 300, rulesVariant: "default", seeds: 2 },
-    { name: "侦察压制", mapId: primary, maxRounds: 150, rulesVariant: "scout", seeds: 2 },
-    { name: "物流压力", mapId: big, maxRounds: 150, rulesVariant: "logistics", seeds: 2 },
+    { name: "主赛 150", mapId: primary, maxRounds: 150, rulesVariant: "default", seeds: mainSeeds },
+    { name: "短局 60", mapId: primary, maxRounds: 60, rulesVariant: "default", seeds: otherSeeds },
+    { name: "长局 300", mapId: big, maxRounds: 300, rulesVariant: "default", seeds: otherSeeds },
+    { name: "侦察压制", mapId: primary, maxRounds: 150, rulesVariant: "scout", seeds: otherSeeds },
+    { name: "物流压力", mapId: big, maxRounds: 150, rulesVariant: "logistics", seeds: otherSeeds },
   ];
   for (const id of EVAL_MAP_IDS) {
-    if (has(id)) legs.push({ name: `考察图 ${id}`, mapId: id, maxRounds: 150, rulesVariant: "default", seeds: 2 });
+    if (has(id)) legs.push({ name: `考察图 ${id}`, mapId: id, maxRounds: 150, rulesVariant: "default", seeds: otherSeeds });
   }
   return legs;
 }
@@ -176,6 +183,8 @@ export class CohortRunner extends EventEmitter {
         scriptProtocolVersion: SCRIPT_PROTOCOL_VERSION,
         scripts: this.scripts,
         ...(this.calibrators.length > 0 ? { calibrators: this.calibrators } : {}),
+        // 停止按钮：当前 leg 跑完的对局照常落库，剩余对局不再跑（别让用户等 20 分钟）
+        shouldStop: () => this.stopRequested,
       });
       this.deps.tournamentRunners.set(tournamentId, runner);
       this.currentLeg = leg.index + 1;

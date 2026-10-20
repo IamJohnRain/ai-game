@@ -51,8 +51,10 @@ async function register(ctx: Ctx, name = "玄武", modelName = "m-practice") {
   return res.json() as { agent: { id: string; status: string; attempts: number; revision: number; practiceRuns: number; maxPracticeRuns: number }; key: string };
 }
 
+// 注意：这里刻意用 app.inject（**不带会话 Cookie**）——练习通道是免登录入口，
+// 测试必须能证明没有会话也能用密钥跑练习，否则会漏掉白名单问题。
 function practice(ctx: Ctx, key: string, script: string) {
-  return ctx.req({
+  return ctx.app.inject({
     method: "POST", url: "/api/practice",
     headers: { authorization: `Bearer ${key}`, "content-type": "application/zip" },
     payload: createZip([{ name: "strategy.js", data: script }]),
@@ -140,11 +142,13 @@ test("练习闸门与上传一致：假密钥 401、超大包 413、结构攻击
   const ctx = await boot();
   try {
     const reg = await register(ctx, "青龙");
-    const noKey = await ctx.req({ method: "POST", url: "/api/practice", headers: { "content-type": "application/zip" }, payload: createZip([{ name: "strategy.js", data: baseline }]) });
+    const noKey = await ctx.app.inject({ method: "POST", url: "/api/practice", headers: { "content-type": "application/zip" }, payload: createZip([{ name: "strategy.js", data: baseline }]) });
     assert.equal(noKey.statusCode, 401);
+    // 免登录白名单：没带会话 Cookie 时也不该被会话守卫拦下，而应当落到练习自己的密钥闸门
+    assert.match((noKey.json() as { error: string }).error, /Bearer/, "应由练习通道的密钥闸门回 401（而不是会话守卫）");
     const fake = await practice(ctx, "ag_" + "0".repeat(32), baseline);
     assert.equal(fake.statusCode, 401);
-    const big = await ctx.req({
+    const big = await ctx.app.inject({
       method: "POST", url: "/api/practice",
       headers: { authorization: `Bearer ${reg.key}`, "content-type": "application/zip" },
       payload: createZip([{ name: "strategy.js", data: randomBytes(300 * 1024) }]),
@@ -153,7 +157,7 @@ test("练习闸门与上传一致：假密钥 401、超大包 413、结构攻击
     assert.equal((big.json() as { stage: string }).stage, "size");
     const traversal = await practice(ctx, reg.key, baseline);
     assert.equal(traversal.statusCode, 200, "正常包应通过（前面的失败不影响密钥）");
-    const noScript = await ctx.req({
+    const noScript = await ctx.app.inject({
       method: "POST", url: "/api/practice",
       headers: { authorization: `Bearer ${reg.key}`, "content-type": "application/zip" },
       payload: createZip([{ name: "meta.json", data: "{}" }]),

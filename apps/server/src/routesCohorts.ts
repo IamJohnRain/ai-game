@@ -76,12 +76,23 @@ export function registerCohortRoutes(app: FastifyInstance, deps: CohortRouteDeps
       return { ok: false, code: 429, error: "已有批次在跑（AI_GAME_MAX_CONCURRENT_COHORTS=1）：等它跑完再发起" };
     }
 
-    const plan = body.legs ?? defaultCohortLegs(registry);
+    const includeCalibrationEarly = body.includeCalibration ?? true;
+    const participantCount = agentIds.length + (includeCalibrationEarly ? 2 : 0);
+    const plan = body.legs ?? defaultCohortLegs(registry, participantCount);
     for (const leg of plan) {
       if (!registry.get(leg.mapId)) return { ok: false, code: 400, error: `未知地图 ${leg.mapId}（可用：${registry.ids().join(", ")}）` };
     }
     const expanded = expandLegs(plan as CohortLegPlan[]);
     if (expanded.length > MAX_LEGS) return { ok: false, code: 400, error: `leg 展开后有 ${expanded.length} 条，超过上限 ${MAX_LEGS}` };
+    const pairs = (agentIds.length + (includeCalibrationEarly ? 2 : 0)) * (agentIds.length + (includeCalibrationEarly ? 2 : 0) - 1) / 2;
+    const plannedMatches = pairs * (body.gamesPerPair ?? 2) * expanded.length;
+    const maxMatches = Number(process.env.AI_GAME_MAX_COHORT_MATCHES ?? 1200);
+    if (plannedMatches > maxMatches) {
+      return {
+        ok: false, code: 400,
+        error: `这个计划要跑 ${plannedMatches} 局，超过单批上限 ${maxMatches}（AI_GAME_MAX_COHORT_MATCHES 可调）：减少 seeds / leg 数或每对局数`,
+      };
+    }
 
     // 快照：解析版本（latest / best / pinned）→ 冻结脚本，批次中途重新上传不影响本批次
     const policy = body.revisionPolicy ?? "latest";
@@ -146,10 +157,9 @@ export function registerCohortRoutes(app: FastifyInstance, deps: CohortRouteDeps
       timer.unref();
     });
 
-    const pairs = ((agentIds.length + calibrators.length) * (agentIds.length + calibrators.length - 1)) / 2;
     return {
       ok: true, cohortId: id, legs: expanded.length,
-      totalMatches: pairs * gamesPerPair * expanded.length,
+      totalMatches: plannedMatches,
       participants: agentIds.length + calibrators.length,
     };
   };

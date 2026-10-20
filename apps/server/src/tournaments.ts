@@ -27,6 +27,8 @@ export interface TournamentRunOptions {
   scripts?: Record<string, { script: string; scriptHash: string; revision?: number }>;
   /** 追加的非入库参赛者（标尺：idle / baseline），不参与"重新签发/上传"那套流程 */
   calibrators?: { id: string; agentName: string; modelName: string; script: string }[];
+  /** 中途停止的判据（当前 leg 已跑完的对局照常落库） */
+  shouldStop?: () => boolean;
 }
 
 export class TournamentRunner extends EventEmitter {
@@ -88,6 +90,7 @@ export class TournamentRunner extends EventEmitter {
         seed: this.opts.seed,
         agents,
         gamesPerPair: this.opts.gamesPerPair,
+        ...(this.opts.shouldStop ? { shouldStop: this.opts.shouldStop } : {}),
         onMatchStart: ({ index, total, pairLabel }) => {
           this.totalMatches = total;
           store.createMatch({
