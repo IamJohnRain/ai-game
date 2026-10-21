@@ -1,36 +1,61 @@
-// apps/web/src/sprites.ts —— 战场素材（SVG）的加载、着色与栅格缓存
+// apps/web/src/sprites.ts —— 战场素材（矢量 SVG + Kenney 位图）的加载、着色与栅格缓存
 //
 // 为什么要有这一层：
-//   1) 素材是矢量 SVG，直接每帧 drawImage 会让浏览器反复栅格化 → 这里按 (素材, 像素尺寸, DPR) 缓存成
-//      离屏 canvas，之后每帧只是一次普通的位图拷贝（32×24 的图就是 768 次抽图，60fps 无压力）。
-//   2) SVG 以 data URI 加载是异步的：首帧可能还没就绪。此时调用方拿到 null 就会退回纯色块，
-//      素材就绪后通过 onSpritesReady() 通知页面重绘一帧——观战时只会看到"一瞬间的色块"，不会白屏。
-//   3) 坦克车体颜色是每个座位不同的：素材里用 __BODY__ / __BODY_DARK__ 占位，在这里替换成座位色。
+//   1) 素材既不都是矢量也不都是位图：地形/设施用手绘 SVG（矢量、任意格子尺寸都清晰），
+//      地面/树/坦克用 Kenney 的 CC0 位图（见 assets/ATTRIBUTION.md，美术质量更高）。
+//      这里统一成"图片地址"一种口径，缓存与就绪通知对两者一视同仁。
+//   2) 位图/ SVG 都是异步解码的：首帧可能还没就绪。此时调用方拿到 null 就退回纯色块，
+//      素材就绪后通过 onSpritesReady() 通知页面重绘一帧——不会白屏、不会闪。
+//   3) 同一个格子可以有多个变体（地面草地/沙地、大小两种树），按格子坐标取伪随机一个，
+//      于是整片地面不会像贴了同一张壁纸。
 import floorSvg from "./assets/tiles/floor.svg?raw";
 import wallSvg from "./assets/tiles/wall.svg?raw";
 import waterSvg from "./assets/tiles/water.svg?raw";
-import forestSvg from "./assets/tiles/forest.svg?raw";
 import spawnSvg from "./assets/tiles/spawn.svg?raw";
 import ammoSvg from "./assets/tiles/ammo.svg?raw";
-import fuelSvg from "./assets/tiles/fuel.svg?raw";
 import resourceSvg from "./assets/tiles/resource.svg?raw";
 import depositSvg from "./assets/tiles/deposit.svg?raw";
-import tankSvgRaw from "./assets/tiles/tank.svg?raw";
-import { SEAT_COLORS } from "./ui";
+import dirtUrl from "./assets/tiles-kenney/ground-dirt.png";
+import sandUrl from "./assets/tiles-kenney/ground-sand.png";
+import grassUrl from "./assets/tiles-kenney/ground-grass.png";
+import treeLargeUrl from "./assets/tiles-kenney/tree-large.png";
+import treeSmallUrl from "./assets/tiles-kenney/tree-small.png";
+import barrelRedUrl from "./assets/tiles-kenney/barrel-red.png";
+import tankRedUrl from "./assets/tiles-kenney/tank-red.png";
+import tankBlueUrl from "./assets/tiles-kenney/tank-blue.png";
+import tankGreenUrl from "./assets/tiles-kenney/tank-green.png";
+import tankBeigeUrl from "./assets/tiles-kenney/tank-beige.png";
 
-/** 地形/设施字符 → 素材。与 protocol 的 TileChar 对齐（A 与 B 都是弹药补给点） */
-export const TILE_SVG: Record<string, string> = {
-  ".": floorSvg,
-  "#": wallSvg,
-  "~": waterSvg,
-  f: forestSvg,
-  S: spawnSvg,
-  A: ammoSvg,
-  B: ammoSvg,
-  G: fuelSvg,
-  R: resourceSvg,
-  D: depositSvg,
+/** SVG 文本 → data URI（同源、无 CORS 问题，可直接画进 canvas 并读取像素；也是位图与矢量统一口径的桥） */
+export function svgDataUrl(svg: string): string {
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+/**
+ * 地形/设施 → 素材地址数组（多张即变体）。
+ * - 地面 `.`：泥地为主、约四分之一铺沙地，看起来像打了整场仗的场地；
+ * - 森林 `f`：大小两种树交错（Kenney Top-down Tanks 素材）；
+ * - 墙/水/出生点/弹药/资源/提交点仍是手绘 SVG：这三样要"一眼看出是硬障碍/硬资源"，
+ *   矢量块的锐利边缘比卡通位图更清楚（也保证没有外部素材时整套画风不会塌）。
+ */
+export const TILE_SRC: Record<string, string[]> = {
+  ".": [dirtUrl, dirtUrl, dirtUrl, sandUrl],
+  "#": [svgDataUrl(wallSvg)],
+  "~": [svgDataUrl(waterSvg)],
+  f: [treeLargeUrl, treeSmallUrl],
+  S: [svgDataUrl(spawnSvg)],
+  A: [svgDataUrl(ammoSvg)],
+  B: [svgDataUrl(ammoSvg)],
+  G: [barrelRedUrl],
+  R: [svgDataUrl(resourceSvg)],
+  D: [svgDataUrl(depositSvg)],
 };
+
+/** 设施格下面的地面（设施图标叠在它上面，和二维"设施站在什么地形上"的口径一致） */
+export const FLOOR_SRC: string[] = [dirtUrl, sandUrl];
+
+/** 森林格的地面：树是带透明通道的位图，底下必须自己铺一层，否则会露出深色画布底 */
+export const FOREST_FLOOR_SRC: string[] = [grassUrl, grassUrl, grassUrl, dirtUrl];
 
 /** 图例（与地图 JSON 的 legend 口径一致，供观战/编辑器共用） */
 export const TILE_LABEL: Record<string, string> = {
@@ -46,7 +71,7 @@ export const TILE_LABEL: Record<string, string> = {
 
 /** 纯色兜底：素材还没加载完时先按这些颜色铺底，避免"黑屏一瞬" */
 export const TILE_FALLBACK_FILL: Record<string, string> = {
-  ".": "#2f3742",
+  ".": "#4a3b2a",
   "#": "#171b23",
   "~": "#1d4b78",
   f: "#1f4a2e",
@@ -58,24 +83,40 @@ export const TILE_FALLBACK_FILL: Record<string, string> = {
   D: "#2f3742",
 };
 
-/** 座位色 → 暗色（用于车体描边）。手写 HSL 变暗而不是引库：只需要"够暗、同色相"。 */
-function darken(hex: string, factor = 0.45): string {
-  const m = /^#([0-9a-f]{6})$/i.exec(hex.trim());
-  if (!m) return "#0b0e14";
-  const n = parseInt(m[1]!, 16);
-  const ch = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => Math.round(v * factor));
-  return `#${ch.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+/** 座位 → 俯视坦克素材（Kenney 的五色坦克里取四色：红/蓝/绿/米黄） */
+const TANK_SRC: Record<number, string> = {
+  1: tankRedUrl,
+  2: tankBlueUrl,
+  3: tankGreenUrl,
+  4: tankBeigeUrl,
+};
+
+export function tankSrc(seat: number): string {
+  return TANK_SRC[seat] ?? tankBeigeUrl;
 }
 
-/** 把坦克素材里的占位符替换成座位配色 */
-export function tankSvg(seat: number): string {
-  const body = SEAT_COLORS[seat] ?? "#94a3b8";
-  return tankSvgRaw.replace(/__BODY_DARK__/g, darken(body)).replace(/__BODY__/g, body);
+/** 稳定伪随机（按格子坐标）：同一张图每次刷新都要长一样 */
+function hash01(x: number, y: number, salt = 0): number {
+  let h = (x * 374761393 + y * 668265263 + salt * 2246822519) | 0;
+  h = (h ^ (h >>> 13)) * 1274126177;
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
-/** SVG 文本 → data URI（同源、无 CORS 问题，可直接画进 canvas 并读取像素） */
-export function svgDataUrl(svg: string): string {
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+/** 取某个格子该用哪张素材（变体由格子坐标决定，不随帧变化） */
+export function tileSrc(ch: string, x: number, y: number): string | null {
+  const list = TILE_SRC[ch] ?? TILE_SRC["."]!;
+  if (list.length === 1) return list[0]!;
+  return list[Math.floor(hash01(x, y, 7) * list.length)] ?? list[0]!;
+}
+
+/** 森林格的地面底图（草地为主） */
+export function forestFloorSrc(x: number, y: number): string {
+  return FOREST_FLOOR_SRC[Math.floor(hash01(x, y, 9) * FOREST_FLOOR_SRC.length)] ?? FOREST_FLOOR_SRC[0]!;
+}
+
+/** 设施格的地面底图 */
+export function floorSrc(x: number, y: number): string {
+  return FLOOR_SRC[Math.floor(hash01(x, y, 8) * FLOOR_SRC.length)] ?? FLOOR_SRC[0]!;
 }
 
 // ---------------------------------------------------------------- 缓存
@@ -97,12 +138,12 @@ export function onSpritesReady(cb: () => void): () => void {
   return () => listeners.delete(cb);
 }
 
-function entryOf(svg: string): Entry {
-  const hit = entries.get(svg);
+function entryOf(src: string): Entry {
+  const hit = entries.get(src);
   if (hit) return hit;
   const img = new Image();
   const entry: Entry = { img, ready: false, failed: false, rasters: new Map() };
-  entries.set(svg, entry);
+  entries.set(src, entry);
   img.onload = () => {
     entry.ready = true;
     for (const cb of listeners) cb();
@@ -111,7 +152,7 @@ function entryOf(svg: string): Entry {
     // 素材坏了就永远退回首帧的色块，不要让画面反复闪烁
     entry.failed = true;
   };
-  img.src = svgDataUrl(svg);
+  img.src = src;
   return entry;
 }
 
@@ -119,10 +160,10 @@ function entryOf(svg: string): Entry {
  * 取一张已栅格化的素材；未就绪时返回 null（调用方退回首帧色块，并在 onSpritesReady 后重绘）。
  * sizePx 一般是格子边长，dpr 传 window.devicePixelRatio。
  */
-export function rasterSprite(svg: string, sizePx: number, dpr: number): HTMLCanvasElement | null {
+export function rasterSprite(src: string, sizePx: number, dpr: number): HTMLCanvasElement | null {
   const size = Math.max(4, Math.round(sizePx));
   const ratio = Math.max(1, Math.min(dpr, 3));
-  const entry = entryOf(svg);
+  const entry = entryOf(src);
   if (entry.failed) return null;
   const key = `${size}@${ratio}`;
   const cached = entry.rasters.get(key);
@@ -133,6 +174,7 @@ export function rasterSprite(svg: string, sizePx: number, dpr: number): HTMLCanv
   canvas.height = Math.max(1, Math.round(size * ratio));
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
+  // 位图素材（Kenney）自带边距与透明通道：等比铺满整格，边缘留白自然形成"物件小巧"的观感
   ctx.drawImage(entry.img, 0, 0, canvas.width, canvas.height);
   // 缓存上限保护：观战页可能经历放大/缩小若干档，超过 8 档就清空重来（下一次重绘会重建）
   if (entry.rasters.size >= 8) entry.rasters.clear();
@@ -141,13 +183,13 @@ export function rasterSprite(svg: string, sizePx: number, dpr: number): HTMLCanv
 }
 
 /** 供 <img> 直接使用的素材地址（图例、编辑器调色板用） */
-export function spriteSrc(svg: string): string {
-  return svgDataUrl(svg);
+export function spriteSrc(src: string): string {
+  return src;
 }
 
 /** 预热：进入观战/编辑器时一次性把要用的素材挂到内存，减少首帧色块的时间 */
 export function preloadSprites(extra: string[] = []): void {
-  for (const svg of [...Object.values(TILE_SVG), ...extra, tankSvg(1), tankSvg(2), tankSvg(3), tankSvg(4)]) {
-    entryOf(svg);
+  for (const src of [...Object.values(TILE_SRC).flat(), ...FLOOR_SRC, ...FOREST_FLOOR_SRC, ...extra, ...[1, 2, 3, 4].map(tankSrc)]) {
+    entryOf(src);
   }
 }

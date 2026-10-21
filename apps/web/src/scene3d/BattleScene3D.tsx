@@ -14,7 +14,10 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { chebyshev, type GameMap, type Ruleset } from "@ai-game/protocol";
 import { visibleTiles, type BattleView, type Terrain, type TankView } from "@ai-game/engine";
-import { SEAT_COLORS_3D, buildWorld, type WorldBuild } from "./world.ts";
+import { SEAT_COLORS_3D, buildWorld, type WorldBuild, type WorldModels } from "./world.ts";
+import { loadModel, setModelTextures } from "./models.ts";
+import { buildTankModel, type TankModel } from "./tankModel.ts";
+import { MODEL_API } from "./assets.ts";
 import { TankRig } from "./tanks.ts";
 import { FxSystem } from "./effects.ts";
 import { type FxCommand, type GridPos } from "./fxPlan.ts";
@@ -156,14 +159,35 @@ export function BattleScene3D(props: BattleScene3DProps) {
     fill.position.set(span * 0.3, span * 0.35, span * 0.4);
     scene.add(fill);
 
-    const world = buildWorld(props.map, props.terrain, { shadows });
+    // 素材（CC0，见 apps/web/src/assets/ATTRIBUTION.md）：只在这里引用一次，
+    // 具体"哪个格子用哪个模型"由 assets.ts 统一声明，世界与坦克各取所需。
+    // 素材加载失败时会自动退回过程式几何——战场永远画得出来。
+    setModelTextures(MODEL_API.textures);
+    // 素材就绪后补一帧：模型是异步到的，而 rAF 在后台标签页里可能迟迟不触发
+    const onAssetReady = () => {
+      const st = stateRef.current;
+      if (st) poke(st, propsRef.current);
+    };
+    const world = buildWorld(props.map, props.terrain, { shadows, models: MODEL_API.world, onModelReady: onAssetReady });
+    const tankModelRef: { current: TankModel | null } = { current: null };
+    if (MODEL_API.tank) {
+      void loadModel(MODEL_API.tank.url).then((asset) => {
+        if (!asset || !stateRef.current) return;
+        tankModelRef.current = buildTankModel(asset, 0xffffff, MODEL_API.tank!.span);
+        // 模型到位后把每辆车换成模型（车体/炮塔分别挂，炮塔照样能独立转向）
+        for (const [seat, rig] of stateRef.current.rigs) {
+          rig.useModel(buildTankModel(asset, SEAT_COLORS_3D[seat] ?? 0x94a3b8, MODEL_API.tank!.span));
+        }
+        poke(stateRef.current, propsRef.current);
+      });
+    }
     scene.add(world.group);
     const fx = new FxSystem();
     scene.add(fx.group);
 
     const rigs = new Map<number, TankRig>();
     for (const seat of Object.keys(props.view.tanks).map(Number).sort((a, b) => a - b)) {
-      const rig = new TankRig({ seat, color: SEAT_COLORS_3D[seat] ?? 0x94a3b8, shadows });
+      const rig = new TankRig({ seat, color: SEAT_COLORS_3D[seat] ?? 0x94a3b8, shadows, tankModel: tankModelRef.current });
       scene.add(rig.group);
       rigs.set(seat, rig);
     }
@@ -189,6 +213,11 @@ export function BattleScene3D(props: BattleScene3DProps) {
       dragging: 0, dragX: 0, dragY: 0,
     };
     stateRef.current = state;
+    // 调试钩子：带 ?debug3d=1 打开页面时把场景挂到 window 上，
+    // 便于在控制台或自动化里核对"模型到底有没有画出来"（平时不挂，避免污染全局）
+    if (new URLSearchParams(window.location.search).has("debug3d")) {
+      (window as unknown as { __scene3d?: SceneState }).__scene3d = state;
+    }
 
     // ---- 尺寸 ----
     const resize = () => {
@@ -293,6 +322,11 @@ export function BattleScene3D(props: BattleScene3DProps) {
       state.elapsed += dt;
       step(state, propsRef.current, dt);
     };
+    // 先手动推进一帧：rAF 在后台/被节流的标签页里可能迟迟不触发，
+    // 而"第一帧"决定了坦克是否站在出生点、相机是否对准棋盘——不能等。
+    state.last = performance.now();
+    state.lastFrameAt = state.last;
+    step(state, propsRef.current, 1 / 60);
     state.raf = requestAnimationFrame(frame);
 
     return () => {

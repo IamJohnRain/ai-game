@@ -10,6 +10,7 @@
 //   这样"打空了"和"打中了"不用看数字也能分辨——这正是回放最需要传达的信息。
 //   粒子用自写 shader 的 Points（逐点大小/透明度/颜色），比一堆 Sprite 便宜一个数量级。
 import * as THREE from "three";
+import { radialTexture, smokeTexture, textTexture } from "./textures.ts";
 
 interface Entry {
   obj: THREE.Object3D;
@@ -44,46 +45,6 @@ function release(list: Entry[], entry: Entry): void {
   entry.obj.parent?.remove(entry.obj);
   entry.ttl = 0;
   entry.life = 0;
-}
-
-/** 生成一张径向渐变纹理（火光、烟、闪光都用它，只换颜色与混合方式） */
-function radialTexture(inner: string, outer = "rgba(0,0,0,0)", size = 128): THREE.Texture {
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = size;
-  const ctx = canvas.getContext("2d")!;
-  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-  g.addColorStop(0, inner);
-  g.addColorStop(0.45, inner);
-  g.addColorStop(1, outer);
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, size, size);
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
-/** 烟雾纹理：在径向渐变上撒噪声，否则一团纯灰看起来像"气泡" */
-function smokeTexture(size = 128): THREE.Texture {
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = size;
-  const ctx = canvas.getContext("2d")!;
-  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-  g.addColorStop(0, "rgba(255,255,255,0.85)");
-  g.addColorStop(0.6, "rgba(255,255,255,0.35)");
-  g.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, size, size);
-  const img = ctx.getImageData(0, 0, size, size);
-  for (let i = 0; i < img.data.length; i += 4) {
-    const n = 0.6 + Math.random() * 0.8;
-    img.data[i] = Math.min(255, img.data[i]! * n);
-    img.data[i + 1] = Math.min(255, img.data[i + 1]! * n);
-    img.data[i + 2] = Math.min(255, img.data[i + 2]! * n);
-  }
-  ctx.putImageData(img, 0, 0);
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
 }
 
 const SPARK_VERT = `
@@ -601,22 +562,3 @@ export class FxSystem {
 }
 
 const FIREBALL_END = new THREE.Color(0x6b3a10);
-
-/** 飘字纹理：白字描深边，保证在任何地形颜色上都读得清 */
-function textTexture(text: string, color: string): THREE.Texture {
-  const canvas = document.createElement("canvas");
-  canvas.width = 256;
-  canvas.height = 80;
-  const ctx = canvas.getContext("2d")!;
-  ctx.font = "700 46px ui-monospace, Menlo, Consolas, monospace";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.lineWidth = 9;
-  ctx.strokeStyle = "rgba(4,6,11,0.92)";
-  ctx.strokeText(text, 128, 42);
-  ctx.fillStyle = color;
-  ctx.fillText(text, 128, 42);
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}

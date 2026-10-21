@@ -7,9 +7,16 @@
 *.jpg binary
 *.jpeg binary
 *.gif binary
+*.webp binary
 *.ico binary
 *.woff2 binary
 *.wasm binary
 *.zip binary
 *.db binary
 *.map binary
+# 三维素材：glb 是二进制 glTF（内含顶点与贴图），换行转换会直接损坏文件
+*.glb binary
+*.gltf binary
+*.bin binary
+*.ktx2 binary
+*.hdr binary

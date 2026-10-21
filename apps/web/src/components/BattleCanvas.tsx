@@ -20,8 +20,8 @@ import { chebyshev, type GameMap, type Pos, type Ruleset } from "@ai-game/protoc
 import { visibleTiles, type BattleView, type TankView, type Terrain } from "@ai-game/engine";
 import { SEAT_COLORS } from "../ui";
 import {
-  TILE_FALLBACK_FILL, TILE_LABEL, TILE_SVG,
-  onSpritesReady, preloadSprites, rasterSprite, spriteSrc, tankSvg,
+  FLOOR_SRC, TILE_FALLBACK_FILL, TILE_LABEL, TILE_SRC,
+  floorSrc, forestFloorSrc, onSpritesReady, preloadSprites, rasterSprite, spriteSrc, tankSrc, tileSrc,
 } from "../sprites";
 
 interface BattleCanvasProps {
@@ -162,8 +162,10 @@ export function BattleCanvas({ map, terrain, view, rules, viewpoint, version }: 
       for (let x = 0; x < W; x++) {
         const ch = row[x] ?? ".";
         const isFacility = "SABGRD".includes(ch);
-        const svg = isFacility ? TILE_SVG["."]! : TILE_SVG[ch];
-        if (!svg || !drawSprite(svg, x, y)) {
+        const src = isFacility ? floorSrc(x, y) : tileSrc(ch, x, y);
+        // 森林格：树是带透明通道的位图，先铺草地再叠树（否则树缝里露出深色画布底）
+        if (ch === "f") drawSprite(forestFloorSrc(x, y), x, y);
+        if (!src || !drawSprite(src, x, y)) {
           ctx.fillStyle = TILE_FALLBACK_FILL[ch] ?? TILE_FALLBACK_FILL["."]!;
           ctx.fillRect(px(x), py(y), cell, cell);
         }
@@ -201,13 +203,13 @@ export function BattleCanvas({ map, terrain, view, rules, viewpoint, version }: 
         }
       }
     };
-    facilityPass(TILE_SVG["S"]!, map.spawns, 0.9);
-    facilityPass(TILE_SVG["B"]!, map.ammoDepots);
-    facilityPass(TILE_SVG["G"]!, map.fuelStations);
-    facilityPass(TILE_SVG["D"]!, map.depositPoints);
+    facilityPass(TILE_SRC["S"]![0]!, map.spawns, 0.9);
+    facilityPass(TILE_SRC["B"]![0]!, map.ammoDepots);
+    facilityPass(TILE_SRC["G"]![0]!, map.fuelStations);
+    facilityPass(TILE_SRC["D"]![0]!, map.depositPoints);
 
     // 资源点：素材 + 剩余量数字（视野外显示 ?，与引擎给出的 null 语义一致）
-    const resourceSvg = TILE_SVG["R"]!;
+    const resourceSvg = TILE_SRC["R"]![0]!;
     for (const node of Object.values(view.nodes)) {
       const vis = visibleAt(node.x, node.y);
       if (!drawSprite(resourceSvg, node.x, node.y, vis ? 1 : UNSEEN_ALPHA)) {
@@ -352,46 +354,42 @@ export function BattleCanvas({ map, terrain, view, rules, viewpoint, version }: 
       const cx = px(t.x) + cell / 2;
       const cy = py(t.y) + cell / 2;
 
-      // 车体素材（按座位着色）；未就绪时退回圆角色块
+      // 车体素材：Kenney 的俯视坦克（自带炮塔与炮管，按座位取色，见 sprites.ts 的说明）。
+      // 素材朝正北，这里按"行驶方向"整体旋转 —— 车开起来就是真的在转向，而不是贴纸滑行。
       const faded = t.disqualified ? 0.35 : t.alive ? 1 : 0.4;
+      const face = faceRef.current.get(t.seat) ?? { x: 0, y: -1 };
+      const heading = Math.atan2(face.x, -face.y); // 北 = 0，顺时针为正（与 canvas 的旋转方向一致）
+      const sprite = rasterSprite(tankSrc(t.seat), cell, dpr);
+      const drawRotated = (alpha: number) => {
+        if (!sprite) return false;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.translate(cx, cy);
+        ctx.rotate(heading);
+        ctx.drawImage(sprite, -cell * 0.5, -cell * 0.5, cell, cell);
+        ctx.restore();
+        ctx.globalAlpha = 1;
+        return true;
+      };
       if (!t.alive) {
         // 阵亡待复活：只留一圈虚线轮廓 + 暗色车体，和"在场"一眼可分
-        ctx.globalAlpha = 0.45;
-        drawSprite(tankSvg(t.seat), t.x, t.y, 0.5);
-        ctx.globalAlpha = 1;
+        if (!drawRotated(0.45)) {
+          ctx.globalAlpha = 0.45;
+          ctx.fillStyle = color;
+          ctx.fillRect(px(t.x) + cell * 0.2, py(t.y) + cell * 0.2, cell * 0.6, cell * 0.6);
+          ctx.globalAlpha = 1;
+        }
         ctx.strokeStyle = color;
         ctx.setLineDash([cell * 0.18, cell * 0.14]);
         ctx.lineWidth = Math.max(1.5, cell * 0.07);
         ctx.strokeRect(px(t.x) + cell * 0.08, py(t.y) + cell * 0.08, cell * 0.84, cell * 0.84);
         ctx.setLineDash([]);
-      } else if (!drawSprite(tankSvg(t.seat), t.x, t.y, faded)) {
+      } else if (!drawRotated(faded)) {
         ctx.globalAlpha = faded;
         ctx.fillStyle = color;
         roundRectPath(ctx, px(t.x) + cell * 0.18, py(t.y) + cell * 0.22, cell * 0.64, cell * 0.66, Math.max(2, cell * 0.16));
         ctx.fill();
         ctx.globalAlpha = 1;
-      } else {
-        ctx.globalAlpha = 1;
-      }
-
-      // 炮管：朝向由位置变化推断，未知则默认朝北（车体素材不含炮管，炮口方向是玩法信息）
-      if (t.alive) {
-        const face = faceRef.current.get(t.seat) ?? { x: 0, y: -1 };
-        const len = cell * 0.42;
-        ctx.strokeStyle = "#0b0e14";
-        ctx.lineWidth = Math.max(2, cell * 0.15);
-        ctx.lineCap = "round";
-        ctx.beginPath();
-        ctx.moveTo(cx, cy);
-        ctx.lineTo(cx + face.x * len, cy + face.y * len);
-        ctx.stroke();
-        ctx.strokeStyle = color;
-        ctx.lineWidth = Math.max(1, cell * 0.07);
-        ctx.beginPath();
-        ctx.moveTo(cx, cy);
-        ctx.lineTo(cx + face.x * len * 0.95, cy + face.y * len * 0.95);
-        ctx.stroke();
-        ctx.lineCap = "butt";
       }
 
       // HP 条压在格子顶部（自己的血量是已知的；敌人血量只在其可见时才会画到这里）
@@ -479,13 +477,13 @@ export function BattleLegend() {
     <div className="legend">
       {Object.entries(TILE_LABEL).map(([ch, label]) => (
         <span className="legend-item" key={ch}>
-          <img className="legend-icon" src={spriteSrc(TILE_SVG[ch]!)} alt="" />
+          <img className="legend-icon" src={spriteSrc(TILE_SRC[ch]![0]!)} alt="" />
           {label}
         </span>
       ))}
       {[1, 2, 3, 4].map((seat) => (
         <span className="legend-item" key={seat}>
-          <img className="legend-icon" src={spriteSrc(tankSvg(seat))} alt="" />
+          <img className="legend-icon" src={spriteSrc(tankSrc(seat))} alt="" />
           P{seat}
         </span>
       ))}

@@ -21,7 +21,7 @@ import {
   setSpawn1v1Slot, spawnsOf, terrainAt, toMap,
   type BrushId, type FacilityKind, type MapDraft,
 } from "../mapDraft";
-import { TILE_FALLBACK_FILL, TILE_SVG, onSpritesReady, preloadSprites, rasterSprite, spriteSrc, tankSvg } from "../sprites";
+import { TILE_FALLBACK_FILL, TILE_SRC, floorSrc, onSpritesReady, preloadSprites, rasterSprite, spriteSrc, tileSrc } from "../sprites";
 
 /** 元素盘：左侧可拖拽的画笔清单 */
 const PALETTE: { group: string; items: { id: BrushId; hint: string }[] }[] = [
@@ -48,24 +48,24 @@ const PALETTE: { group: string; items: { id: BrushId; hint: string }[] }[] = [
 ];
 
 const BRUSH_ICON: Record<BrushId, string | null> = {
-  ".": TILE_SVG["."]!,
-  "#": TILE_SVG["#"]!,
-  "~": TILE_SVG["~"]!,
-  f: TILE_SVG["f"]!,
-  spawn: TILE_SVG["S"]!,
-  ammo: TILE_SVG["B"]!,
-  fuel: TILE_SVG["G"]!,
-  resource: TILE_SVG["R"]!,
-  deposit: TILE_SVG["D"]!,
+  ".": TILE_SRC["."]![0]!,
+  "#": TILE_SRC["#"]![0]!,
+  "~": TILE_SRC["~"]![0]!,
+  f: TILE_SRC["f"]![0]!,
+  spawn: TILE_SRC["S"]![0]!,
+  ammo: TILE_SRC["B"]![0]!,
+  fuel: TILE_SRC["G"]![0]!,
+  resource: TILE_SRC["R"]![0]!,
+  deposit: TILE_SRC["D"]![0]!,
   erase: null,
 };
 
 const FACILITY_SVG: Record<FacilityKind, string> = {
-  spawn: TILE_SVG["S"]!,
-  ammo: TILE_SVG["B"]!,
-  fuel: TILE_SVG["G"]!,
-  resource: TILE_SVG["R"]!,
-  deposit: TILE_SVG["D"]!,
+  spawn: TILE_SRC["S"]![0]!,
+  ammo: TILE_SRC["B"]![0]!,
+  fuel: TILE_SRC["G"]![0]!,
+  resource: TILE_SRC["R"]![0]!,
+  deposit: TILE_SRC["D"]![0]!,
 };
 
 const DISTANCE_LABELS: Record<string, string> = {
@@ -220,7 +220,7 @@ export function MapEditorPage() {
       for (let x = 0; x < W; x++) {
         const ch = terrainAt(draft, x, y);
         const onFacility = Boolean(facilityAt(draft, x, y));
-        const svg = onFacility ? TILE_SVG["."]! : TILE_SVG[ch];
+        const svg = onFacility ? floorSrc(x, y) : tileSrc(ch, x, y);
         if (!svg || !drawSprite(svg, x, y)) {
           ctx.fillStyle = TILE_FALLBACK_FILL[onFacility ? "." : ch] ?? TILE_FALLBACK_FILL["."]!;
           ctx.fillRect(x * CELL, y * CELL, CELL, CELL);

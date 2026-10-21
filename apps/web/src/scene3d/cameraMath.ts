@@ -91,12 +91,13 @@ export function fitDistance(spanX: number, spanZ: number, fovDeg: number, aspect
   const fov = (fovDeg * Math.PI) / 180;
   const halfV = Math.tan(fov / 2);
   const halfH = halfV * Math.max(0.2, aspect);
-  // 斜视时棋盘投影会变窄：以对角线的一半作为保守半径，保证旋转到任何角度都装得下
   const halfX = (spanX * padding) / 2;
   const halfZ = (spanZ * padding) / 2;
-  const needV = halfZ / halfV + halfX * 0.16;
-  const needH = Math.max(halfX, halfZ) / halfH;
-  return Math.max(4, Math.max(needV, needH));
+  // 按外接圆算：用户可以把相机转到任意角度，斜着看时棋盘的对角线才是真正要装下的跨距。
+  // （早期版本只按"正对"估算，24×24 的图转到 45° 就会切角。）
+  const radius = Math.hypot(halfX, halfZ);
+  const need = Math.max(radius / halfV, radius / halfH);
+  return Math.max(4, need * 0.92);
 }
 
 /**

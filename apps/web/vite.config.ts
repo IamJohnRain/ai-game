@@ -14,6 +14,8 @@ const root = fileURLToPath(new URL(".", import.meta.url));
 export default defineConfig({
   root,
   plugins: [react()],
+  // glTF 模型也算资源（默认列表里没有 .glb，不声明的话 import 会被当成代码处理）
+  assetsInclude: ["**/*.glb"],
   server: {
     port: 5173,
     proxy: {
