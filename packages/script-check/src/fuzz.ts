@@ -51,6 +51,13 @@ export function generateFuzzStates(map: GameMap, rules: Ruleset, count: number, 
       remaining: rng() < 0.5 ? null : (rng() < 0.3 ? 0 : int(1, n.capacity)),
     }));
 
+    // 补给点：没写容量的图是无限供给（capacity=null）；写了容量的一半可见、可见的随机余量
+    const supplyView = (p: { x: number; y: number; capacity?: number }) => {
+      const capacity = p.capacity ?? null;
+      if (capacity === null) return { x: p.x, y: p.y, capacity, remaining: null };
+      return { x: p.x, y: p.y, capacity, remaining: rng() < 0.5 ? null : int(0, capacity) };
+    };
+
     const evCount = int(0, 4);
     const events: StateEvent[] = Array.from({ length: evCount }, () => {
       const kind = int(0, 6);
@@ -95,8 +102,8 @@ export function generateFuzzStates(map: GameMap, rules: Ruleset, count: number, 
       lastKnownEnemies: enemies.map((e) => ({ seat: e.seat, pos: { ...e.pos }, hp: e.hp, seenRound: Math.max(1, 1) })),
       resourceNodes: nodes,
       depositPoints: map.depositPoints.map((p) => ({ ...p })),
-      ammoDepots: map.ammoDepots.map((p) => ({ ...p })),
-      fuelStations: map.fuelStations.map((p) => ({ ...p })),
+      ammoDepots: map.ammoDepots.map((p) => supplyView(p)),
+      fuelStations: map.fuelStations.map((p) => supplyView(p)),
       scores: seats.map((s) => ({ seat: s, score: s === seat ? int(-150, 500) : int(-150, 300), alive: rng() < 0.8 })),
       events,
     });

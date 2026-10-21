@@ -389,3 +389,195 @@ test("基线脚本在没有 home 资源点的地图上也不崩（兜底回中�
   }
   assert.ok(res.ranking.some((r) => r.unitsDeposited > 0), "兜底后仍应有经济循环");
 });
+
+// ---------------------------------------------------------------- 地图级车辆参数与补给点库存
+
+/** arena-01 的 (5,2) 就在 1 号出生点 (2,2) 东边 3 格，正好用来测"跑一趟补给点" */
+function arenaWith(patch: { ammo?: Record<string, unknown>; tuning?: GameMap["tuning"] }): GameMap {
+  return {
+    ...map,
+    ammoDepots: map.ammoDepots.map((p) => (p.x === 5 && p.y === 2 ? { ...p, ...patch.ammo } : p)),
+    ...(patch.tuning ? { tuning: patch.tuning } : {}),
+  };
+}
+
+test("补给点库存：装一次拿空 → 空了报 AMMO_EMPTY → 到刷新轮次回充一发再装", () => {
+  const depotMap = arenaWith({ ammo: { capacity: 2, initial: 2, regenEveryRounds: 3 } });
+  const seen: State[] = [];
+  const ctrl = new ScriptedController({
+    1: (s) => {
+      seen.push(s);
+      const n = seen.length;
+      if (n === 1) return [{ type: "move", dir: "E" }, { type: "move", dir: "E" }];   // (2,2) → (4,2)
+      if (n === 2) return [{ type: "move", dir: "E" }, { type: "loadAmmo" }];          // 站上 (5,2) 装弹：库存只有 2 发
+      if (n === 3) return [{ type: "loadAmmo" }];                                      // 库存空 → AMMO_EMPTY
+      if (n === 4) return [{ type: "loadAmmo" }];                                      // 第 3 轮回充 1 发后再装
+      return [{ type: "wait" }];
+    },
+    2: () => [{ type: "wait" }],
+  });
+  const res = runMatch({
+    matchId: "depot-stock",
+    map: depotMap,
+    rules: { ...rules, maxRounds: 8 },
+    seed: 20261021,
+    seats: [{ seat: 1, name: "P1", scriptHash: "h1" }, { seat: 2, name: "P2", scriptHash: "h2" }],
+    spawns: [{ seat: 1, pos: { x: 2, y: 2 } }, { seat: 2, pos: { x: 29, y: 21 } }],
+    controller: ctrl,
+  });
+
+  const loads = res.events.filter((e) => e.t === "load_ammo") as Extract<MatchEvent, { t: "load_ammo" }>[];
+  assert.equal(loads.length, 2, "装空一次 → 被拒一次 → 回充后再装一次");
+  assert.equal(loads[0]!.rounds, 2, "库存只有 2 发，一次只能装 2 发");
+  assert.equal(loads[0]!.depotRemainingAfter, 0, "装完就拿空");
+  assert.equal(loads[1]!.rounds, 1, "回充 1 发后只能装 1 发");
+  assert.equal(loads[1]!.depotRemainingAfter, 0);
+
+  assert.equal(
+    res.events.filter((e) => e.t === "invalid_action" && e.reason === "AMMO_EMPTY").length, 1,
+    "库存为空时应当被 AMMO_EMPTY 拒绝（而不是「我弹药满了」或直接扣分成）",
+  );
+
+  const regens = res.events.filter((e) => e.t === "supply_regen") as Extract<MatchEvent, { t: "supply_regen" }>[];
+  assert.ok(regens.length >= 1, "每 3 轮应当回充一次");
+  const first = regens[0]!;
+  assert.equal(first.kind, "ammo");
+  assert.equal(first.x, 5);
+  assert.equal(first.y, 2);
+  assert.equal(first.remainingAfter, 1);
+  // 回充必须发生在"第二次装弹之前"——否则第二次装不上，这个用例本身就说不通
+  const firstRegenAt = res.events.findIndex((e) => e.t === "supply_regen");
+  const secondLoadAt = res.events.lastIndexOf(loads[1]!);
+  assert.ok(firstRegenAt < secondLoadAt, "回充应当早于第二次成功装弹");
+
+  // 脚本看到的补给点视图：有限库存给数字，无限供给给 null
+  const atStart = seen[0]!;
+  const limited = atStart.ammoDepots.find((p) => p.x === 5 && p.y === 2)!;
+  const unlimited = atStart.ammoDepots.find((p) => p.x === 26)!;
+  assert.equal(limited.capacity, 2);
+  assert.equal(limited.remaining, 2);
+  assert.equal(unlimited.capacity, null, "没写容量的点仍然是无限供给");
+  assert.equal(unlimited.remaining, null);
+});
+
+test("车辆参数：载弹上限 0 = 禁止相互攻击（出门没炮弹、装也装不了）", () => {
+  const seen: State[] = [];
+  const ctrl = new ScriptedController({
+    1: (s) => {
+      seen.push(s);
+      return s.self.ammo > 0 ? [{ type: "fire", target: { x: 29, y: 21 } }] : [{ type: "loadAmmo" }];
+    },
+    2: () => [{ type: "fire", target: { x: 5, y: 2 } }],
+  });
+  const res = runMatch({
+    matchId: "no-combat",
+    map: arenaWith({ tuning: { ammoMax: 0 } }),
+    rules,
+    seed: 4242,
+    seats: [{ seat: 1, name: "P1", scriptHash: "h1" }, { seat: 2, name: "P2", scriptHash: "h2" }],
+    spawns: [{ seat: 1, pos: { x: 5, y: 2 } }, { seat: 2, pos: { x: 29, y: 21 } }], // P1 就站在弹药点上
+    controller: ctrl,
+  });
+  assert.equal(res.events.filter((e) => e.t === "fire").length, 0, "该图不该出现任何开火");
+  const reasons = new Set(
+    res.events.filter((e) => e.t === "invalid_action").map((e) => (e as Extract<MatchEvent, { t: "invalid_action" }>).reason),
+  );
+  assert.ok(reasons.has("NO_AMMO"), "开火应当因为没炮弹被拒");
+  assert.ok(reasons.has("AMMO_FULL"), "装弹应当因为上限就是 0（已经满了）被拒");
+  for (const st of res.ranking) assert.equal(st.shotsFired, 0);
+  assert.equal(seen[0]!.self.ammo, 0, "出生弹药被夹到上限 0");
+  assert.equal(seen[0]!.self.ammoMax, 0);
+});
+
+test("车辆参数：载货上限 0 采不了资源；血量上限 60 → 出门就是 60 血", () => {
+  const seen: State[] = [];
+  const ctrl = new ScriptedController({
+    1: (s) => {
+      seen.push(s);
+      return [{ type: "collect" }, { type: "collect" }];
+    },
+    2: () => [{ type: "wait" }],
+  });
+  const res = runMatch({
+    matchId: "tuned",
+    map: arenaWith({ tuning: { cargoMax: 0, hpMax: 60 } }),
+    rules,
+    seed: 999,
+    seats: [{ seat: 1, name: "P1", scriptHash: "h1" }, { seat: 2, name: "P2", scriptHash: "h2" }],
+    spawns: [{ seat: 1, pos: { x: 7, y: 4 } }, { seat: 2, pos: { x: 29, y: 21 } }], // P1 直接站在资源点 R1 上
+    controller: ctrl,
+  });
+  assert.equal(res.events.filter((e) => e.t === "collect").length, 0, "载货上限 0 时一单位都装不下");
+  assert.ok(
+    res.events.some((e) => e.t === "invalid_action" && e.reason === "CARGO_FULL"),
+    "采集应当被 CARGO_FULL 拒绝",
+  );
+  assert.equal(seen[0]!.self.cargoMax, 0);
+  assert.equal(seen[0]!.self.hpMax, 60);
+  assert.equal(seen[0]!.self.hp, 60);
+  const start = res.events[0] as Extract<MatchEvent, { t: "match_start" }>;
+  assert.equal((start.rules as { hpMax: number }).hpMax, 60, "match_start 里记录的应当是合并后的有效规则");
+});
+
+test("回放视图：补给点余量跟着事件走（拿空 → 回充），无限供给的点保持 null", () => {
+  const depotMap = arenaWith({ ammo: { capacity: 2, initial: 2, regenEveryRounds: 3 } });
+  const view = reduceEvents(depotMap, rules, [
+    { t: "load_ammo", seat: 1, rounds: 2, scoreDelta: -4, ammoAfter: 8, scoreAfter: -4, depotIndex: 0, depotRemainingAfter: 0 },
+    { t: "supply_regen", kind: "ammo", index: 0, x: 5, y: 2, remainingAfter: 1 },
+  ]);
+  const limited = view.supplies.find((s) => s.kind === "ammo" && s.index === 0)!;
+  const unlimited = view.supplies.find((s) => s.kind === "ammo" && s.index === 1)!;
+  assert.equal(limited.capacity, 2);
+  assert.equal(limited.remaining, 1, "拿空（0）之后回充 1，视图应当跟上");
+  assert.equal(unlimited.capacity, null, "没写容量的点不参与库存，视图里是无限");
+  assert.equal(unlimited.remaining, null);
+});
+
+// 这块专门盯"地图参数把上限调小/调没之后，基线脚本还能不能正常打"：
+// 上限一律从 state.self 读，所以 ammoMax=5（编辑器新图默认档）和 ammoMax=0（禁止攻击）都必须照常跑经济。
+function runBaselineOn(customMap: GameMap, seed = 20261021) {
+  const ctrl = new LocalController();
+  for (const seat of [1, 2]) ctrl.load(seat, baselineScript);
+  return runMatch({
+    matchId: "baseline-tuned",
+    map: customMap,
+    rules: { ...rules, maxRounds: 60 },
+    seed,
+    seats: [{ seat: 1, name: "P1", scriptHash: "h1" }, { seat: 2, name: "P2", scriptHash: "h2" }],
+    spawns: assignSpawns(customMap, [1, 2], seed),
+    controller: ctrl,
+  });
+}
+
+test("基线脚本在载弹上限 5（编辑器新图默认档）的图上照常运转：不空耗 AP、不刷无效动作", () => {
+  const res = runBaselineOn(arenaWith({ tuning: { ammoMax: 5 } }));
+  const invalid = res.ranking.reduce((s, r) => s + r.invalidActions, 0);
+  assert.equal(res.ranking.reduce((s, r) => s + r.strikes, 0), 0, "不应有 strike");
+  assert.ok(invalid <= 2, `无效动作应当很少（上限 5 时不该反复撞 AMMO_FULL），实际 ${invalid}`);
+  assert.ok(res.ranking.some((r) => r.unitsDeposited > 0), "经济仍应转起来");
+  assert.ok(res.ranking.some((r) => r.shotsFired > 0), "5 发上限照样能开火");
+});
+
+test("基线脚本在禁止相互攻击（载弹上限 0）的图上照常采集提交，而不是在弹药点干等", () => {
+  const res = runBaselineOn(arenaWith({ tuning: { ammoMax: 0 } }));
+  assert.equal(res.events.filter((e) => e.t === "fire").length, 0, "该图不该开火");
+  for (const st of res.ranking) {
+    assert.equal(st.shotsFired, 0);
+    assert.equal(st.strikes, 0, "不该因为装不上弹而崩");
+  }
+  assert.ok(res.ranking.some((r) => r.unitsDeposited > 0), "比分应当来自采集与提交");
+});
+
+test("基线脚本在有库存的补给点上不刷无效动作：看见采空就等回充，而不是一直按装弹", () => {
+  const stocked: GameMap = {
+    ...map,
+    ammoDepots: map.ammoDepots.map((p) => ({ ...p, capacity: 2, initial: 2, regenEveryRounds: 3 })),
+    fuelStations: map.fuelStations.map((p) => ({ ...p, capacity: 20, initial: 20, regenEveryRounds: 2 })),
+  };
+  const res = runBaselineOn(stocked);
+  const invalid = res.ranking.reduce((s, r) => s + r.invalidActions, 0);
+  assert.equal(res.ranking.reduce((s, r) => s + r.strikes, 0), 0, "不应有 strike");
+  assert.ok(invalid <= 2, `拿空的补给点不该被反复硬按（应当看到 AMMO_EMPTY/FUEL_EMPTY 就收手），实际无效动作 ${invalid}`);
+  assert.ok(res.ranking.some((r) => r.unitsDeposited > 0), "经济仍应转起来");
+  assert.ok(res.events.some((e) => e.t === "supply_regen"), "库存应当有回充事件");
+});

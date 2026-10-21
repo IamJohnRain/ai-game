@@ -1,5 +1,6 @@
 // packages/protocol/src/rules.ts —— 数值权威（与 docs/02-游戏规则-v1.md §7 参数表一一对应）
 import { z } from "zod";
+import type { GameMap } from "./map.ts";
 
 export const HitChanceBandSchema = z.object({
   maxDistance: z.number().int().positive(),
@@ -107,4 +108,25 @@ export function hitChance(rules: Ruleset, distance: number, targetInForest: bool
 
 export function damageOnHit(rules: Ruleset, targetInForest: boolean): number {
   return targetInForest ? Math.round(rules.shellDamage * rules.forestDamageMult) : rules.shellDamage;
+}
+
+/**
+ * 地图参数叠加到规则上：把 `map.tuning` 里的上限并进 Ruleset，**并把 initial/respawn 夹进新上限之内**。
+ * 夹这一步不能省：不然"载弹上限 0（禁止相互攻击）"的图里，坦克照样带着 RULES.initial.ammo 发出门 ——
+ * 车体上限与出生补给必须一致，否则地图参数只是摆设。
+ * 引擎只认 Ruleset，所以"地图能改玩法数值"这件事不需要引擎改一行代码。
+ */
+export function effectiveRules(rules: Ruleset, map: GameMap): Ruleset {
+  const t = map.tuning;
+  if (!t) return rules;
+  const hpMax = t.hpMax ?? rules.hpMax;
+  const ammoMax = t.ammoMax ?? rules.ammoMax;
+  const cargoMax = t.cargoMax ?? rules.cargoMax;
+  const clamp = (v: { hp: number; ammo: number; fuel: number; cargo: number }) => ({
+    ...v,
+    hp: Math.min(v.hp, hpMax),
+    ammo: Math.min(v.ammo, ammoMax),
+    cargo: Math.min(v.cargo, cargoMax),
+  });
+  return { ...rules, hpMax, ammoMax, cargoMax, initial: clamp(rules.initial), respawn: clamp(rules.respawn) };
 }

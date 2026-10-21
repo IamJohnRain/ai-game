@@ -232,6 +232,29 @@ export function BattleCanvas({ map, terrain, view, rules, viewpoint, version }: 
       }
     }
 
+    // 补给点库存（只在"地图写了容量"的图上出现）：数字压在图标下方，视野外显示 ? —— 与资源点同一套读法。
+    // 没写容量的图完全是无限供给，这里一格数字都不画，老地图看起来和以前一模一样。
+    const stockOf = new Map<string, number | null>();
+    for (const s of view.supplies) stockOf.set(`${s.x},${s.y}`, s.remaining);
+    const drawStock = (x: number, y: number, color: string) => {
+      const remaining = stockOf.get(`${x},${y}`);
+      if (remaining === undefined || cell < 14) return; // undefined = 这张图没给它设库存
+      const vis = visibleAt(x, y);
+      const cx = px(x) + cell / 2;
+      const cy = py(y) + cell * 0.78;
+      const text = remaining === null ? "?" : String(remaining);
+      ctx.font = `600 ${Math.max(9, Math.floor(cell * 0.34))}px ui-monospace, Menlo, Consolas, monospace`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.lineWidth = Math.max(2, cell * 0.12);
+      ctx.strokeStyle = "rgba(6,8,12,0.85)";
+      ctx.strokeText(text, cx, cy);
+      ctx.fillStyle = vis ? color : "#a1a1aa";
+      ctx.fillText(text, cx, cy);
+    };
+    for (const p of map.ammoDepots) if (p.capacity !== undefined) drawStock(p.x, p.y, "#f0a72c");
+    for (const p of map.fuelStations) if (p.capacity !== undefined) drawStock(p.x, p.y, "#2fbdb0");
+
     // 提交点是"值得抢的目标"：多格提交区画一圈金边，把广场的边界讲清楚
     if (map.depositPoints.length > 1) {
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;

@@ -105,13 +105,19 @@ export const MAP_SPEC_EXAMPLE: GameMap = {
   ],
   spawns: [{ x: 1, y: 2 }, { x: 7, y: 2 }, { x: 1, y: 6 }, { x: 7, y: 6 }],
   spawnsFor1v1: [1, 3],
-  ammoDepots: [{ x: 4, y: 1 }, { x: 4, y: 7 }],
+  // 补给点两种形状都示出来：只写 x/y = 无限供给；写了 capacity = 有库存、按间隔回充
+  ammoDepots: [
+    { x: 4, y: 1, capacity: 12, initial: 6, regenEveryRounds: 3 },
+    { x: 4, y: 7 },
+  ],
   fuelStations: [{ x: 0, y: 4 }, { x: 8, y: 4 }],
   resourceNodes: [
     { id: "R1", x: 4, y: 2, kind: "center", capacity: 10, initial: 10, regenEveryRounds: 6 },
     { id: "R2", x: 4, y: 6, kind: "center", capacity: 10, initial: 10, regenEveryRounds: 6 },
   ],
   depositPoints: [{ x: 4, y: 3 }, { x: 4, y: 5 }],
+  // 车辆参数覆盖：可只写要改的项，缺省沿用 RULES（示形状；真实赛图可能没有这一块）
+  tuning: { ammoMax: 5 },
 };
 
 /** §6.2 字符表：字符与含义都从 protocol 取，改引擎就是改任务书 */

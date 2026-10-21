@@ -35,8 +35,10 @@ export const INVALID_REASONS = [
   "NO_CARGO",
   "NOT_ON_AMMO",
   "AMMO_FULL",
+  "AMMO_EMPTY",
   "NOT_ON_FUEL",
   "FUEL_FULL",
+  "FUEL_EMPTY",
 ] as const;
 export type InvalidReason = (typeof INVALID_REASONS)[number];
 
@@ -73,6 +75,13 @@ export interface ResourceNodeView {
   x: number;
   y: number;
   capacity: number;
+  remaining: number | null;
+}
+/** 补给点（弹药点/加油点）：capacity=null 表示无限供给；remaining=null 表示不在视野里（看不到库存） */
+export interface SupplyPointView {
+  x: number;
+  y: number;
+  capacity: number | null;
   remaining: number | null;
 }
 export interface SelfView {
@@ -115,8 +124,8 @@ export interface State {
   lastKnownEnemies: LastKnownEnemy[];
   resourceNodes: ResourceNodeView[];
   depositPoints: { x: number; y: number }[];
-  ammoDepots: { x: number; y: number }[];
-  fuelStations: { x: number; y: number }[];
+  ammoDepots: SupplyPointView[];
+  fuelStations: SupplyPointView[];
   scores: { seat: number; score: number; alive: boolean }[];
   events: StateEvent[];
 }
@@ -134,14 +143,33 @@ export interface MoveEvent { t: "move"; seat: number; from: { x: number; y: numb
 export interface FireEvent { t: "fire"; seat: number; target: { x: number; y: number }; hit: boolean; damage: number; targetSeat: number | null; ammoAfter: number }
 export interface CollectEvent { t: "collect"; seat: number; node: string; amount: number; remainingAfter: number; cargoAfter: number }
 export interface DepositEvent { t: "deposit"; seat: number; units: number; scoreDelta: number; scoreAfter: number }
-export interface LoadAmmoEvent { t: "load_ammo"; seat: number; rounds: number; scoreDelta: number; ammoAfter: number; scoreAfter: number }
-export interface RefuelEvent { t: "refuel"; seat: number; fuelAdded: number; scoreDelta: number; fuelAfter: number; scoreAfter: number }
+export interface LoadAmmoEvent {
+  t: "load_ammo"; seat: number; rounds: number; scoreDelta: number; ammoAfter: number; scoreAfter: number;
+  /** 补给点有库存时才带：这次装弹后该点的余量（回放据此在格子上显示数字） */
+  depotIndex?: number;
+  depotRemainingAfter?: number;
+}
+export interface RefuelEvent {
+  t: "refuel"; seat: number; fuelAdded: number; scoreDelta: number; fuelAfter: number; scoreAfter: number;
+  /** 同 load_ammo：有库存的加油点才带 */
+  depotIndex?: number;
+  depotRemainingAfter?: number;
+}
 export interface DeathEvent { t: "death"; seat: number; killerSeat: number | null; pos: { x: number; y: number }; scoreDelta: number; scoreAfter: number }
 export interface RespawnEvent { t: "respawn"; seat: number; pos: { x: number; y: number } }
 export interface InvalidActionEvent { t: "invalid_action"; seat: number; action: unknown; reason: InvalidReason }
 export interface StrikeEvent { t: "strike"; seat: number; kind: "exception" | "timeout" | "bad_return"; detail: string }
 export interface DisqualifiedEvent { t: "disqualified"; seat: number; kind: "STRIKES_EXCEEDED" }
 export interface NodeRegenEvent { t: "node_regen"; node: string; remainingAfter: number }
+/** 补给点刷新：kind 区分弹药点/加油点，index 是该点在 MAP.ammoDepots / MAP.fuelStations 里的下标 */
+export interface SupplyRegenEvent {
+  t: "supply_regen";
+  kind: "ammo" | "fuel";
+  index: number;
+  x: number;
+  y: number;
+  remainingAfter: number;
+}
 export interface MatchEndEvent {
   t: "match_end";
   ranking: { seat: number; score: number; rank: number }[];
@@ -149,11 +177,11 @@ export interface MatchEndEvent {
 export type MatchEvent =
   | MatchStartEvent | TurnBeginEvent | MoveEvent | FireEvent | CollectEvent | DepositEvent
   | LoadAmmoEvent | RefuelEvent | DeathEvent | RespawnEvent | InvalidActionEvent | StrikeEvent
-  | DisqualifiedEvent | NodeRegenEvent | MatchEndEvent;
+  | DisqualifiedEvent | NodeRegenEvent | SupplyRegenEvent | MatchEndEvent;
 
 export const EVENT_TYPES = [
   "match_start", "turn_begin", "move", "fire", "collect", "deposit", "load_ammo", "refuel",
-  "death", "respawn", "invalid_action", "strike", "disqualified", "node_regen", "match_end",
+  "death", "respawn", "invalid_action", "strike", "disqualified", "node_regen", "supply_regen", "match_end",
 ] as const;
 
 // ---------------- 结果与统计 ----------------

@@ -112,6 +112,7 @@ node --import tsx tools/cli/src/index.ts pack --script strategy.js --meta meta.j
 | 必备元素 | 出生点 ≥ 2、弹药补给点 ≥ 1、加油点 ≥ 1、资源点 ≥ 1、提交点 ≥ 1 |
 | 出生点 | `MAP.spawns` = 全部出生点（数组下标 = 座位号 - 1）；1v1 实际使用 `MAP.spawnsFor1v1` 声明的两个（1 基序号，**可能相邻、可能对角**） |
 | 每格字符 | 只会是下面字符表里的字符；设施格必须与对应的坐标数组一一对应 |
+| 车辆参数 | 地图**可能**用 `MAP.tuning` 覆盖血量 / 载弹 / 载货上限（缺省 = 第 7 节的 `RULES`）。**上限一律从 `state.self.hpMax / ammoMax / cargoMax` 读**，别假设它们等于 `RULES` 同名字段：常见的是载弹上限被压到 5 发；极端一点的图**载弹上限 0 = 禁止相互攻击**（出门没炮弹、`loadAmmo` 也装不上），比分只能靠采集与提交 |
 
 ### 6.2 地图上有哪些元素（字符表）
 
@@ -139,7 +140,27 @@ node --import tsx tools/cli/src/index.ts pack --script strategy.js --meta meta.j
 
 不同图的"性格"差别很大：提交点可能只有一个且在正中，也可能每个象限各有一个；资源点可能贴着出生点，也可能集中在中央。**这些都要在 `onInit` 里从 `MAP` 现算。**
 
-### 6.5 怎么写"不挑图"的策略（最容易踩的坑）
+### 6.5 补给点（弹药 / 加油）的库存
+
+弹药点与加油点有**两种形态**，从 `MAP` 的字段形状就能看出来：
+
+| `MAP` 里的形状 | 行为 |
+| --- | --- |
+| 只写 `{x, y}` | **无限供给**：站在上面、分数够，就能一直补给 |
+| 还写了 `capacity` / `initial` / `regenEveryRounds` | **有库存**：开局 `initial`（缺省 = `capacity`），每 `regenEveryRounds` 轮回 1 点、封顶 `capacity`；**拿空之后补给会被拒绝**（`AMMO_EMPTY` / `FUEL_EMPTY`），得等回充 |
+
+库存看得到：`state.ammoDepots[].remaining` / `state.fuelStations[].remaining`（`capacity: null` = 无限供给；`remaining: null` = 这一点不在你的视野里，看不到余量）。
+一次补给拿多少：`loadAmmo` 拿 `min(RULES.loadAmmoPerAction, 弹药上限 - 当前弹药, 该点余量)`，`refuel` 同理受 `RULES.refuelPerAction` 与油量上限约束。
+**所以"弹药/油够不够"要按你的行动次数算**：上限低的图上可能得来回跑几趟，别等到跑过去发现空的。
+
+### 6.6 车辆参数（地图可能覆盖 `RULES` 的上限）
+
+`MAP.tuning` 可能出现三种字段（可以只写其中几个，没写的沿用 `RULES`）：`hpMax`（血量上限）、`ammoMax`（载弹上限）、`cargoMax`（载货上限）。
+它同时会**夹住出生与复活的补给**：上限 5 发的图，你出门就只有 5 发；上限 0 的图，出门没有炮弹、也装不上——那种图上唯一的得分方式是采集与提交。
+
+写法要求：**凡是"上限"都读 `state.self.*`，凡是"价格/伤害/距离"都读 `RULES`**，两者都不要在脚本里写死。
+
+### 6.7 怎么写"不挑图"的策略（最容易踩的坑）
 
 1. **一个坐标都不许写死**：任何目标点都从 `MAP.spawns` / `MAP.resourceNodes` / `MAP.ammoDepots` / `MAP.fuelStations` / `MAP.depositPoints` 与 `ctx.mySpawn` 现取；尺寸也从 `MAP.width` / `MAP.height` 取。
 2. **开局把这张图算清楚**：`onInit` 有 1000ms 预算，足够用 `API.pathFind` 算出"我 → 最近加油点 / 最近弹药点 / 最近资源点 / 提交点"的距离（或路径），存进模块级变量给 `onTurn` 用。
@@ -167,7 +188,7 @@ node --import tsx tools/cli/src/index.ts pack --script strategy.js --meta meta.j
 | 模糊测试 | 200 个**极端但合法**的状态下 `onTurn` 都不抛异常、都返回合法动作数组 | 空数组越界、除零、未处理 `pathFind` 返回 `null`、零弹药/零燃油分支报错 |
 | 冒烟对局 | 与基线机器人打 30 回合，**0 次异常/超时** | `onTurn` 超过 50ms（复杂度太高）、状态未初始化导致首回合抛错 |
 
-> 模糊测试与冒烟对局会对**注册表里的每一张地图各跑一遍**（内置图 + 组织者自制的图 + 平台预置的“考察图”，返回的 `validation[]` 里 `mapId` 标明在哪张图上、`ok` 是否通过）。练习通道跑的是同一套流水线，所以练习通过 ≈ 正式提交的准入通过。原因很简单：赛事可以换图，只在一张图上跑得通不算通过。所以脚本必须**读全局 `MAP` / `ctx.mySpawn`，不要把坐标、尺寸、设施数量写死**（见第 6.5 节）。
+> 模糊测试与冒烟对局会对**注册表里的每一张地图各跑一遍**（内置图 + 组织者自制的图 + 平台预置的“考察图”，返回的 `validation[]` 里 `mapId` 标明在哪张图上、`ok` 是否通过）。练习通道跑的是同一套流水线，所以练习通过 ≈ 正式提交的准入通过。原因很简单：赛事可以换图，只在一张图上跑得通不算通过。所以脚本必须**读全局 `MAP` / `ctx.mySpawn`，不要把坐标、尺寸、设施数量写死**（见第 6.7 节）。
 
 单次决策的时间预算是 **{{TURN_BUDGET}}ms**、内存 **64MB**；`onInit` 预算是 1000ms、内存 256MB（可以在 `onInit` 里做重活，例如预计算距离表或路径）。任何一次异常/超时都会记一次 strike，**赛中累计 3 次即被判"待机"直到终局**。
 

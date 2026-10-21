@@ -60,10 +60,12 @@
 | `MAP.grid[y][x]` | 单字符地形；字符含义见第 6.2 节的字符表 |
 | `MAP.spawns` | 出生点数组，索引 = 座位号 - 1 |
 | `MAP.spawnsFor1v1` | （可选）1v1 用的两个出生点序号（1 基，缺省 `[1,3]`）；两个点**可能相邻也可能对角**，谁拿哪一个由引擎按种子分配 —— 一律以 `ctx.mySpawn` 为准 |
-| `MAP.ammoDepots` / `MAP.fuelStations` / `MAP.depositPoints` | 弹药点 / 加油点 / 提交点的坐标数组（**数量每张图都不同，可能只有一个**） |
+| `MAP.ammoDepots` / `MAP.fuelStations` | 弹药点 / 加油点坐标数组（**数量每张图都不同，可能只有一个**）；只写 `{x,y}` 的是无限供给，带 `capacity/initial/regenEveryRounds` 的有库存，见第 6.5 节 |
+| `MAP.depositPoints` | 提交点坐标数组（`deposit` 交资源换分的地方） |
 | `MAP.resourceNodes` | `{id, x, y, kind, capacity, initial, regenEveryRounds}` 数组，语义见第 6.4 节 |
+| `MAP.tuning` | （可选）地图对车辆上限的覆盖：`hpMax` / `ammoMax` / `cargoMax`，缺省沿用 `RULES`。**上限一律读 `state.self.*`**，见第 6.6 节；`ammoMax: 0` 的图上禁止相互攻击 |
 
-**RULES** —— 完整数值表，字段名即参数名，见第 7 节。**赛事可能使用参数变体**（例如视野更小、油箱更小的对抗变体）：所有数值一律以运行时的 `RULES` 为准，脚本里不要复制任何数字。
+**RULES** —— 完整数值表，字段名即参数名，见第 7 节。**赛事可能使用参数变体**（例如视野更小、油箱更小的对抗变体），**地图也可能覆盖车辆上限**（`MAP.tuning`）：所有数值一律以运行时的 `RULES` 与 `state.self.*` 为准，脚本里不要复制任何数字。
 
 **API** —— 工具函数，见 5.8。
 
@@ -99,9 +101,10 @@
 
 ### 5.7 经济（关键：这是得分游戏，不是歼灭游戏）
 
-- 提交资源：站到提交点上执行 `deposit`，每单位 +`RULES.depositScorePerUnit` 分，载货上限 `RULES.cargoMax` → 单趟最高 +`cargoMax × depositScorePerUnit` 分。**提交点与资源点的相对位置决定了一张图的性格**（近端资源点安全但产出低，中心资源点产出高但所有人都会来），而**每张图都不一样**：距离请在 `onInit` 里用 `API.pathFind` 实测（第 6.5 节）。
+- 提交资源：站到提交点上执行 `deposit`，每单位 +`RULES.depositScorePerUnit` 分，载货上限 `RULES.cargoMax` → 单趟最高 +`cargoMax × depositScorePerUnit` 分。**提交点与资源点的相对位置决定了一张图的性格**（近端资源点安全但产出低，中心资源点产出高但所有人都会来），而**每张图都不一样**：距离请在 `onInit` 里用 `API.pathFind` 实测（第 6.7 节）。
 - 采集：站在资源点上 `collect`，一次最多 `RULES.collectPerAction` 单位；资源点有容量与回复速度（每 `regenEveryRounds` 轮 +1 单位，见 `MAP.resourceNodes`），`remaining` 只在视野内可见。
 - 补弹：`RULES.ammoPrice` 分/发；加油：`RULES.fuelPricePer10` 分/10 燃油；移动 `RULES.moveFuelCost` 燃油/格；燃油耗尽后仍可移动，但每格扣 `RULES.emergencyMoveCost` 分（应急燃料，尽量避免）。
+- **补给点可能是有库存的**：`MAP.ammoDepots` / `MAP.fuelStations` 里只写 `{x,y}` 的点无限供给；写了 `capacity` 的点会被拿空、每 `regenEveryRounds` 轮回 1 点，空了补给会被拒（`AMMO_EMPTY` / `FUEL_EMPTY`），余量看 `state.ammoDepots[].remaining` / `state.fuelStations[].remaining`（见第 6.5 节）。
 - 死亡：-`RULES.deathPenalty` 分 + 停机 `RULES.respawnRounds` 轮 + 载货清零；击杀者 +`RULES.killReward` 分。
 - 结论：一趟"资源点 → 提交点 → 顺路补给"的循环收益 = 单趟载货 ×10 分，扣掉燃油与弹药成本后仍有明显正收益；而**在提交点附近蹲守的对手是在抢同一份收入**，这笔账要自己算。
 

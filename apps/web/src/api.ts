@@ -5,6 +5,7 @@
 import {
   BUILTIN_MAPS,
   DEFAULT_RULESET,
+  effectiveRules,
   type GameMap,
   type MatchEvent,
   type PlayerStats,
@@ -590,7 +591,8 @@ async function baseBundle(matchId: string): Promise<MatchBundle> {
     resolveMap(match.mapId, degraded),
     resolveRules(match.rulesetVersion, degraded),
   ]);
-  return { match, players, ranking, map, rules, degraded };
+  // 地图参数叠加到规则上（与引擎 runMatch 同一套口径）：界面显示的载弹/载货/血量上限必须和实际打的一致
+  return { match, players, ranking, map, rules: effectiveRules(rules, map), degraded };
 }
 
 export const bundles = {
@@ -602,6 +604,6 @@ export const bundles = {
       resolveMap(match.mapId, degraded),
       resolveRules(match.rulesetVersion, degraded),
     ]);
-    return { match, players, events, ranking, map, rules, degraded };
+    return { match, players, events, ranking, map, rules: effectiveRules(rules, map), degraded };
   },
 };

@@ -6,7 +6,7 @@
 //                 设施可达性、出生点等价性、1v1 出生点声明、经济是否正循环、是否容易打成僵局等。
 // 审计只给结论（errors / warnings），不抛异常，便于编辑器实时显示。
 import {
-  DEFAULT_RULESET, MAP_MAX_DIM, MAP_MIN_DIM, chebyshev, validateMap,
+  DEFAULT_RULESET, MAP_MAX_DIM, MAP_MIN_DIM, chebyshev, effectiveRules, validateMap,
   type GameMap, type Pos, type Ruleset,
 } from "@ai-game/protocol";
 import { PathFinder } from "./pathfind.ts";
@@ -58,6 +58,8 @@ function nearest(pf: PathFinder, from: Pos, targets: Pos[]): { pos: Pos; steps: 
  * 时间复杂度：设施数量 × 一次 A*，对 64×64 的地图也在毫秒级。
  */
 export function auditMap(map: GameMap, rules: Ruleset = DEFAULT_RULESET): MapAudit {
+  // 玩法判断一律按「地图生效后的规则」算：地图可能把血量/载弹/载货上限调过（见 map.tuning）
+  const eff = effectiveRules(rules, map);
   const errors: string[] = [];
   const warnings: string[] = [];
   const count = (c: string) => map.grid.join("").split("").filter((x) => x === c).length;
@@ -222,15 +224,54 @@ export function auditMap(map: GameMap, rules: Ruleset = DEFAULT_RULESET): MapAud
 
   // ---------- 经济可持续性 ----------
   const totalSustainable = map.resourceNodes.reduce((sum, n) => sum + n.capacity / n.regenEveryRounds, 0);
-  const cargoPerTrip = rules.cargoMax * rules.depositScorePerUnit;
+  const cargoPerTrip = eff.cargoMax * eff.depositScorePerUnit;
   if (map.resourceNodes.length > 0) {
     const tripSteps = (distances.spawn_to_homeResourceNode ?? 0) + (distances.spawn_to_deposit ?? 0);
-    const fuelCost = Math.ceil((tripSteps * rules.moveFuelCost) / 10) * rules.fuelPricePer10;
-    if (tripSteps > 0 && cargoPerTrip - fuelCost <= rules.deathPenalty) {
-      warnings.push(`一趟搬运净收益仅 ${cargoPerTrip - fuelCost} 分（≈死亡惩罚 ${rules.deathPenalty} 分）：冒险搬资源不划算，双方会倾向龟缩`);
+    const fuelCost = Math.ceil((tripSteps * eff.moveFuelCost) / 10) * eff.fuelPricePer10;
+    if (tripSteps > 0 && cargoPerTrip - fuelCost <= eff.deathPenalty) {
+      warnings.push(`一趟搬运净收益仅 ${cargoPerTrip - fuelCost} 分（≈死亡惩罚 ${eff.deathPenalty} 分）：冒险搬资源不划算，双方会倾向龟缩`);
     }
     if (centerNodes.length === 0) warnings.push("没有 kind=center 的高收益资源点：缺少值得抢的目标，容易打成僵局");
     if (totalSustainable < 0.3) warnings.push(`全图资源可持续产出仅 ${totalSustainable.toFixed(2)} 单位/轮：后期会采空`);
+  }
+
+  // ---------- 地图级车辆参数 ----------
+  // 这些是"作者故意这么调"的旋钮：审计不拦，只把后果说清楚（0 载弹 = 禁止相互攻击最容易被忽略）
+  const tuning = map.tuning;
+  if (tuning) {
+    if (tuning.ammoMax === 0) {
+      warnings.push("车辆参数：载弹上限 0 —— 这张图禁止相互攻击，比分只能靠采集与提交");
+    } else if (tuning.ammoMax !== undefined && tuning.ammoMax < eff.loadAmmoPerAction) {
+      warnings.push(`车辆参数：载弹上限 ${tuning.ammoMax} 发 < 一次装弹 ${eff.loadAmmoPerAction} 发：每次来补给点都装不满上限`);
+    }
+    if (tuning.cargoMax === 0) warnings.push("车辆参数：载货上限 0 —— 一单位资源都装不下，得分只能来自击杀");
+    if (tuning.hpMax !== undefined && tuning.hpMax <= eff.shellDamage) {
+      warnings.push(`车辆参数：血量上限 ${tuning.hpMax} ≤ 一炮伤害 ${eff.shellDamage}：一炮一条命，回合数会很短`);
+    }
+    // 只列真被夹住的项：载货初始本来就是 0，混在里面会让人以为它也被改了
+    const clamped: string[] = [];
+    if (eff.initial.hp !== rules.initial.hp) clamped.push(`血量 ${eff.initial.hp}`);
+    if (eff.initial.ammo !== rules.initial.ammo) clamped.push(`载弹 ${eff.initial.ammo}`);
+    if (eff.initial.cargo !== rules.initial.cargo) clamped.push(`载货 ${eff.initial.cargo}`);
+    if (clamped.length > 0) warnings.push(`上限调低后出生补给会被夹住：${clamped.join(" / ")}（复活同理）`);
+  }
+
+  // ---------- 补给点库存 ----------
+  // 只有一部分补给点写了容量是最常见的坑：玩家会绕远去"无限"的那几个
+  const supplyGroups: { label: string; list: { capacity?: number; regenEveryRounds?: number }[]; perVisit: number }[] = [
+    { label: "弹药点", list: map.ammoDepots, perVisit: eff.loadAmmoPerAction },
+    { label: "加油点", list: map.fuelStations, perVisit: eff.refuelPerAction },
+  ];
+  for (const { label, list, perVisit } of supplyGroups) {
+    const limited = list.filter((p) => p.capacity !== undefined);
+    if (limited.length === 0) continue;
+    if (limited.length < list.length) {
+      warnings.push(`${label}里只有 ${limited.length}/${list.length} 个写了容量：其余仍是无限供给，玩家会只去无限的那几个`);
+    }
+    const tiny = limited.filter((p) => (p.capacity ?? 0) < perVisit);
+    if (tiny.length > 0) warnings.push(`${tiny.length} 个${label}容量不足一次补给（< ${perVisit}）：跑一趟装不满`);
+    const sustainable = limited.reduce((sum, p) => sum + 1 / Math.max(1, p.regenEveryRounds ?? 1), 0);
+    if (sustainable < 0.25) warnings.push(`${label}总回复只有 ${sustainable.toFixed(2)} 点/轮：后期基本补给不上，别把图打成废土`);
   }
 
   return {

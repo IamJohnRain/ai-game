@@ -19,14 +19,38 @@ export const TILE_LEGEND: Record<TileChar, string> = {
   "~": "水：阻挡移动，但不挡视线（可以隔水对射）",
   f: "森林：可通行、挡视线；站在里面受击伤害按 `RULES.forestDamageMult` 折减，且距离超过 `RULES.forestStealthRadius` 不会被看见",
   S: "出生点：`MAP.spawns` 里的坐标（数组下标 = 座位号 - 1）",
-  A: "弹药补给点：`MAP.ammoDepots`（`loadAmmo` 装弹，扣 `RULES.ammoPrice` 分/发）",
+  A: "弹药补给点：`MAP.ammoDepots`（`loadAmmo` 装弹，扣 `RULES.ammoPrice` 分/发）；写了 `capacity` 的点有库存，`state.ammoDepots[].remaining` 可见，拿空后每 `regenEveryRounds` 轮回 1 发",
   B: "弹药补给点：与 `A` 完全等价（不同地图用了不同字符，脚本要同时认这两个）",
-  G: "加油点：`MAP.fuelStations`（`refuel` 加油，扣分见 `RULES.fuelPricePer10`）",
+  G: "加油点：`MAP.fuelStations`（`refuel` 加油，扣分见 `RULES.fuelPricePer10`）；与弹药点同一套库存规则（`state.fuelStations[].remaining`）",
   R: "资源点：`MAP.resourceNodes`（`collect` 采集，唯一的收入来源）",
   D: "资源提交点：`MAP.depositPoints`（`deposit` 交资源换分）",
 };
 
 export const PosSchema = z.object({ x: z.number().int().nonnegative(), y: z.number().int().nonnegative() });
+
+/**
+ * 补给点（弹药点 A/B、加油点 G）。
+ * 只写 x/y = **无限供给**（平台历史行为：站在点上有分就能一直装）；写了 capacity 就变成"有库存"：
+ * 起手库存 `initial`（缺省 = capacity），每 `regenEveryRounds` 轮回复 1 点、封顶 capacity，空了就用不了。
+ * 与资源点 R 是同一套"容量 / 初始 / 刷新"语义，区别只在资源点供采集、补给点供装弹/加油。
+ */
+export const SupplyPointSchema = PosSchema.extend({
+  capacity: z.number().int().positive().optional(),
+  initial: z.number().int().nonnegative().optional(),
+  regenEveryRounds: z.number().int().positive().optional(),
+});
+export type SupplyPoint = z.infer<typeof SupplyPointSchema>;
+
+/**
+ * 地图级车辆参数：只写要改的项，其余沿用 RULES。**ammoMax = 0 表示禁止相互攻击**（装不了弹就打不出去，
+ * 变成纯经济局）；引擎会把 initial/respawn 夹到新上限之内，否则"上限 0"的图里坦克照样带着初始弹药出门。
+ */
+export const MapTuningSchema = z.object({
+  hpMax: z.number().int().positive().optional(),
+  ammoMax: z.number().int().nonnegative().optional(),
+  cargoMax: z.number().int().nonnegative().optional(),
+});
+export type MapTuning = z.infer<typeof MapTuningSchema>;
 
 export const ResourceNodeSchema = z.object({
   id: z.string(),
@@ -51,10 +75,12 @@ export const GameMapSchema = z.object({
   gridNote: z.string().optional(),
   spawns: z.array(PosSchema).min(2),
   spawnsFor1v1: z.array(z.number().int()).optional(),
-  ammoDepots: z.array(PosSchema),
-  fuelStations: z.array(PosSchema),
+  ammoDepots: z.array(SupplyPointSchema),
+  fuelStations: z.array(SupplyPointSchema),
   resourceNodes: z.array(ResourceNodeSchema),
   depositPoints: z.array(PosSchema),
+  /** 车辆参数覆盖（见 MapTuningSchema）；不写 = 全部沿用 RULES */
+  tuning: MapTuningSchema.optional(),
   distanceReference_P1: z.record(z.unknown()).optional(),
 });
 export type GameMap = z.infer<typeof GameMapSchema>;
@@ -123,6 +149,24 @@ export function validateMap(map: GameMap): string[] {
   if (map.depositPoints.length === 0) errs.push("没有提交点");
   if (map.ammoDepots.length === 0) errs.push("没有弹药补给点");
   if (map.fuelStations.length === 0) errs.push("没有加油点");
+  // 补给点：要"有库存"就得说清刷新节奏，缺一样都是作者写漏了（无限供给请整块不写）
+  const checkSupply = (key: "ammoDepots" | "fuelStations", label: string) => {
+    (map[key] as SupplyPoint[]).forEach((p, i) => {
+      const where = `${label} #${i + 1} (${p.x},${p.y})`;
+      if (p.capacity === undefined) {
+        if (p.initial !== undefined || p.regenEveryRounds !== undefined) {
+          errs.push(`${where} 写了 initial/regenEveryRounds 却没写 capacity（无限供给请整块留空）`);
+        }
+        return;
+      }
+      if (p.regenEveryRounds === undefined) errs.push(`${where} 有容量却没有刷新间隔 regenEveryRounds`);
+      if (p.initial !== undefined && p.initial > p.capacity) {
+        errs.push(`${where} 初始库存 ${p.initial} 超过容量 ${p.capacity}`);
+      }
+    });
+  };
+  checkSupply("ammoDepots", "弹药点");
+  checkSupply("fuelStations", "加油点");
   return errs;
 }
 

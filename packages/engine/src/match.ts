@@ -1,6 +1,6 @@
 // packages/engine/src/match.ts —— 确定性回合制引擎（规则权威：docs/02-游戏规则-v1.md）
 import {
-  ActionSchema, API_VERSION, SCHEMA_VERSION, chebyshev, damageOnHit, DIRS, hitChance, step,
+  ActionSchema, API_VERSION, SCHEMA_VERSION, chebyshev, damageOnHit, DIRS, effectiveRules, hitChance, step,
   type Action, type Ctx, type GameMap, type InvalidReason, type MatchEvent, type MatchResult,
   type PlayerStats, type Pos, type Ruleset, type ScoreBreakdown, type State, type StateEvent,
 } from "@ai-game/protocol";
@@ -25,6 +25,18 @@ export interface RunMatchInput {
 
 interface NodeState { id: string; x: number; y: number; capacity: number; remaining: number; regenEveryRounds: number; kind: "home" | "center" }
 
+/**
+ * 补给点运行时状态（弹药点/加油点）：capacity = null 表示**无限供给**（地图没写容量，历史行为）。
+ * 有容量时每 regenEveryRounds 轮 +1 封顶，空了就用不了（AMMO_EMPTY / FUEL_EMPTY）。
+ */
+interface SupplyState {
+  x: number;
+  y: number;
+  capacity: number | null;
+  remaining: number | null;
+  regenEveryRounds: number | null;
+}
+
 interface Tank {
   seat: number; name: string; scriptHash: string;
   pos: Pos; spawn: Pos;
@@ -43,7 +55,10 @@ const STRIKE_LIMIT = 3;
 function emptyBreakdown(): ScoreBreakdown { return { deposit: 0, kill: 0, death: 0, ammo: 0, fuel: 0 }; }
 
 export function runMatch(input: RunMatchInput): MatchResult {
-  const { map, rules, seed } = input;
+  const { map, seed } = input;
+  // 地图参数（map.tuning）在这里叠加到规则上：引擎内部只认 Ruleset，
+  // 于是"这张图载弹上限 5 / 禁止相互攻击"这类设定不需要在引擎里散落分支，也不会有调用方漏掉。
+  const rules = effectiveRules(input.rules, map);
   const terrain = buildTerrain(map);
   const pathFinder = new PathFinder(terrain);
   const engineRng = mulberry32(deriveSeed(seed, "engine"));
@@ -71,6 +86,23 @@ export function runMatch(input: RunMatchInput): MatchResult {
   const nodes: NodeState[] = map.resourceNodes.map((n) => ({
     id: n.id, x: n.x, y: n.y, capacity: n.capacity, remaining: n.initial, regenEveryRounds: n.regenEveryRounds, kind: n.kind,
   }));
+
+  // 补给点：地图没写 capacity 就是无限供给（起手与刷新都为 null，判定与事件都不涉及它）
+  const initSupply = (list: GameMap["ammoDepots"]): SupplyState[] => list.map((p) => {
+    const capacity = p.capacity ?? null;
+    return {
+      x: p.x, y: p.y, capacity,
+      remaining: capacity === null ? null : (p.initial ?? capacity),
+      regenEveryRounds: capacity === null ? null : (p.regenEveryRounds ?? 1),
+    };
+  });
+  const ammo = initSupply(map.ammoDepots);
+  const fuel = initSupply(map.fuelStations);
+  /** 格子 → 补给点下标（同一格只认第一个，校验器不允许重复声明） */
+  const ammoAt = new Map<number, number>();
+  const fuelAt = new Map<number, number>();
+  ammo.forEach((p, i) => { if (!ammoAt.has(terrain.index(p.x, p.y))) ammoAt.set(terrain.index(p.x, p.y), i); });
+  fuel.forEach((p, i) => { if (!fuelAt.has(terrain.index(p.x, p.y))) fuelAt.set(terrain.index(p.x, p.y), i); });
 
   // 每个座位的"自上次行动以来的可知事件"队列
   const pending = new Map<number, StateEvent[]>(seatList.map((s) => [s, []]));
@@ -219,6 +251,17 @@ export function runMatch(input: RunMatchInput): MatchResult {
         emit({ t: "node_regen", node: n.id, remainingAfter: n.remaining });
       }
     }
+    // 回合末：补给点回充（只在"有库存"的地图上跑）
+    const regenSupply = (list: SupplyState[], kind: "ammo" | "fuel") => {
+      list.forEach((p, index) => {
+        if (p.capacity === null || p.remaining === null || p.regenEveryRounds === null) return;
+        if (round % p.regenEveryRounds !== 0 || p.remaining >= p.capacity) return;
+        p.remaining += 1;
+        emit({ t: "supply_regen", kind, index, x: p.x, y: p.y, remainingAfter: p.remaining });
+      });
+    };
+    regenSupply(ammo, "ammo");
+    regenSupply(fuel, "fuel");
   }
 
   const ranking = finishRanking();
@@ -287,6 +330,11 @@ export function runMatch(input: RunMatchInput): MatchResult {
       const t = tanks.get(s)!;
       return { seat: s, score: t.score, alive: t.alive };
     });
+    /** 补给点的脚本可见视图：capacity=null 是无限供给；remaining=null 表示这一格不在视野里（库存看不到） */
+    const supplyViews = (list: SupplyState[]) => list.map((p) => {
+      const visible = chebyshev(me.pos, { x: p.x, y: p.y }) <= rules.visionRadius && hasLOS(terrain, me.pos, { x: p.x, y: p.y });
+      return { x: p.x, y: p.y, capacity: p.capacity, remaining: visible ? p.remaining : null };
+    });
     return {
       schemaVersion: SCHEMA_VERSION, round, turn: turnNo, turnOrder: [...order], turnInRound,
       self: {
@@ -299,8 +347,8 @@ export function runMatch(input: RunMatchInput): MatchResult {
       lastKnownEnemies,
       resourceNodes: nodeViews,
       depositPoints: map.depositPoints.map((p) => ({ ...p })),
-      ammoDepots: map.ammoDepots.map((p) => ({ ...p })),
-      fuelStations: map.fuelStations.map((p) => ({ ...p })),
+      ammoDepots: supplyViews(ammo),
+      fuelStations: supplyViews(fuel),
       scores,
       events: (pending.get(seat) ?? []).map((e) => ({ ...e })),
     };
@@ -419,28 +467,45 @@ export function runMatch(input: RunMatchInput): MatchResult {
         return;
       }
       case "loadAmmo": {
-        if (!t.ammo[t.index(tank.pos.x, tank.pos.y)]) return invalid(tank, action, "NOT_ON_AMMO", round, seat);
+        const si = ammoAt.get(t.index(tank.pos.x, tank.pos.y));
+        if (si === undefined) return invalid(tank, action, "NOT_ON_AMMO", round, seat);
         if (tank.ammo >= rules.ammoMax) return invalid(tank, action, "AMMO_FULL", round, seat);
-        const n = Math.min(rules.loadAmmoPerAction, rules.ammoMax - tank.ammo);
+        const depot = ammo[si]!;
+        const want = Math.min(rules.loadAmmoPerAction, rules.ammoMax - tank.ammo);
+        // 有库存的补给点会被拿空；无限供给的地图维持原样
+        const n = depot.remaining === null ? want : Math.min(want, depot.remaining);
+        if (n <= 0) return invalid(tank, action, "AMMO_EMPTY", round, seat);
+        if (depot.remaining !== null) depot.remaining -= n;
         const cost = n * rules.ammoPrice;
         tank.ammo += n;
         tank.score -= cost;
         tank.breakdown.ammo -= cost;
         tank.ammoLoaded += n;
-        emit({ t: "load_ammo", seat, rounds: n, scoreDelta: -cost, ammoAfter: tank.ammo, scoreAfter: tank.score });
+        emit({
+          t: "load_ammo", seat, rounds: n, scoreDelta: -cost, ammoAfter: tank.ammo, scoreAfter: tank.score,
+          ...(depot.remaining === null ? {} : { depotIndex: si, depotRemainingAfter: depot.remaining }),
+        });
         pushTo(pending, seat, { type: "load_ammo", seat, rounds: n, scoreDelta: -cost, round });
         return;
       }
       case "refuel": {
-        if (!t.fuel[t.index(tank.pos.x, tank.pos.y)]) return invalid(tank, action, "NOT_ON_FUEL", round, seat);
+        const si = fuelAt.get(t.index(tank.pos.x, tank.pos.y));
+        if (si === undefined) return invalid(tank, action, "NOT_ON_FUEL", round, seat);
         if (tank.fuel >= rules.fuelMax) return invalid(tank, action, "FUEL_FULL", round, seat);
-        const added = Math.min(rules.refuelPerAction, rules.fuelMax - tank.fuel);
+        const station = fuel[si]!;
+        const want = Math.min(rules.refuelPerAction, rules.fuelMax - tank.fuel);
+        const added = station.remaining === null ? want : Math.min(want, station.remaining);
+        if (added <= 0) return invalid(tank, action, "FUEL_EMPTY", round, seat);
+        if (station.remaining !== null) station.remaining -= added;
         const cost = Math.ceil(added / 10) * rules.fuelPricePer10;
         tank.fuel += added;
         tank.score -= cost;
         tank.breakdown.fuel -= cost;
         tank.fuelLoaded += added;
-        emit({ t: "refuel", seat, fuelAdded: added, scoreDelta: -cost, fuelAfter: tank.fuel, scoreAfter: tank.score });
+        emit({
+          t: "refuel", seat, fuelAdded: added, scoreDelta: -cost, fuelAfter: tank.fuel, scoreAfter: tank.score,
+          ...(station.remaining === null ? {} : { depotIndex: si, depotRemainingAfter: station.remaining }),
+        });
         pushTo(pending, seat, { type: "refuel", seat, fuelAdded: added, scoreDelta: -cost, round });
         return;
       }

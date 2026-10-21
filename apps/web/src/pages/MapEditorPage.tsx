@@ -11,15 +11,17 @@
 //   ③ 试跑（服务端 /api/maps/playtest）：用平台基线脚本在这张图上真打一局，把"能不能打起来"跑成数字。
 // 保存走 /api/maps：服务端会用同一套判据再校验一遍（errors 非空即拒），并把距离参考表按实测寻路重算。
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DEFAULT_RULESET } from "@ai-game/protocol";
 import { auditMap, type MapAudit } from "@ai-game/engine";
 import { api, ApiError, type MapListItem, type PlaytestResult } from "../api";
 import { Badge, Banner, EmptyState, Section } from "../ui";
 import {
   BRUSH_LABEL,
+  DEFAULT_TUNING,
   borderWall, clearFacilities, draftFromMap, draftJson, draftStats, emptyDraft, eraseAt,
   facilityAt, isWalkable, mirrorPoints, mirrorize, paint, resizeDraft, setMeta, setNodeParams,
-  setSpawn1v1Slot, spawnsOf, terrainAt, toMap,
-  type BrushId, type FacilityKind, type MapDraft,
+  setSpawn1v1Slot, setSupplyParams, setTuning, spawnsOf, terrainAt, toMap,
+  type BrushId, type DraftFacility, type FacilityKind, type MapDraft,
 } from "../mapDraft";
 import { TILE_FALLBACK_FILL, TILE_SRC, floorSrc, onSpritesReady, preloadSprites, rasterSprite, spriteSrc, tileSrc } from "../sprites";
 
@@ -406,6 +408,14 @@ export function MapEditorPage() {
     () => draft.facilities.map((f, index) => ({ f, index })).filter((r) => r.f.kind === "resource"),
     [draft.facilities],
   );
+  const ammoRows = useMemo(
+    () => draft.facilities.map((f, index) => ({ f, index })).filter((r) => r.f.kind === "ammo"),
+    [draft.facilities],
+  );
+  const fuelRows = useMemo(
+    () => draft.facilities.map((f, index) => ({ f, index })).filter((r) => r.f.kind === "fuel"),
+    [draft.facilities],
+  );
   const spawns = spawnsOf(draft);
   const spawnOrdinals = spawns.map((_, i) => i + 1);
   const playtestSpawnOf = (seat: number) => {
@@ -755,6 +765,85 @@ export function MapEditorPage() {
         )}
       </Section>
 
+      <Section
+        title="车辆参数"
+        extra={<span className="muted small">不勾 = 整张图跟随 RULES（{DEFAULT_RULESET.hpMax} 血 / {DEFAULT_RULESET.ammoMax} 弹 / {DEFAULT_RULESET.cargoMax} 货）</span>}
+      >
+        <label className="chip-toggle">
+          <input
+            type="checkbox"
+            checked={draft.tuning !== null}
+            onChange={(e) => commit(setTuning(draft, e.target.checked ? {} : null))}
+          />
+          用地图自己的车辆参数（覆盖规则里的上限）
+        </label>
+        {draft.tuning ? (
+          <div className="config-grid" style={{ marginTop: 10 }}>
+            <label className="field">
+              <span>最大血量</span>
+              <input
+                type="number"
+                min={1}
+                value={draft.tuning.hpMax ?? DEFAULT_TUNING.hpMax}
+                onChange={(e) => commit(setTuning(draft, { hpMax: Math.max(1, Math.round(Number(e.target.value) || 1)) }))}
+              />
+            </label>
+            <label className="field">
+              <span>最大载弹量（0 = 禁止相互攻击）</span>
+              <input
+                type="number"
+                min={0}
+                value={draft.tuning.ammoMax ?? DEFAULT_TUNING.ammoMax}
+                onChange={(e) => commit(setTuning(draft, { ammoMax: Math.max(0, Math.round(Number(e.target.value) || 0)) }))}
+              />
+            </label>
+            <label className="field">
+              <span>最大载货（0 = 采了也装不下）</span>
+              <input
+                type="number"
+                min={0}
+                value={draft.tuning.cargoMax ?? DEFAULT_TUNING.cargoMax}
+                onChange={(e) => commit(setTuning(draft, { cargoMax: Math.max(0, Math.round(Number(e.target.value) || 0)) }))}
+              />
+            </label>
+          </div>
+        ) : null}
+        <p className="hint">
+          上限调低时，出门与复活的补给会自动夹到上限之内（载弹上限 0 的图，坦克出门就没有炮弹，只在采集与提交上比高低）。
+          脚本一律读 <code>state.self.hpMax / ammoMax / cargoMax</code>，不要假设它们等于规则默认值。
+        </p>
+      </Section>
+
+      <Section
+        title="弹药点库存"
+        extra={<span className="muted small">留空 = 无限供给；写了容量就是"拿空 + 每 N 轮回 1"</span>}
+      >
+        <SupplyParams
+          label="弹药补给点"
+          kind="ammo"
+          rows={ammoRows}
+          perVisit={DEFAULT_RULESET.loadAmmoPerAction}
+          draft={draft}
+          onPatch={(index, patch) => commit(setSupplyParams(draft, index, patch))}
+          onRemove={(x, y) => commit(eraseAt(draft, x, y))}
+        />
+      </Section>
+
+      <Section
+        title="加油点库存"
+        extra={<span className="muted small">同弹药点：留空 = 无限供给</span>}
+      >
+        <SupplyParams
+          label="加油点"
+          kind="fuel"
+          rows={fuelRows}
+          perVisit={DEFAULT_RULESET.refuelPerAction}
+          draft={draft}
+          onPatch={(index, patch) => commit(setSupplyParams(draft, index, patch))}
+          onRemove={(x, y) => commit(eraseAt(draft, x, y))}
+        />
+      </Section>
+
       <Section title="资源点参数" extra={<span className="muted small">产出 = 容量 ÷ 回复间隔（单位/轮）</span>}>
         {nodeRows.length === 0 ? (
           <div className="hint">还没有资源点。资源点是这张图的收入来源，没有它双方只能互相干瞪眼。</div>
@@ -936,3 +1025,95 @@ export function MapEditorPage() {
     </div>
   );
 }
+
+/**
+ * 补给点（弹药点/加油点）参数表：容量留空 = 无限供给（平台历史行为），写了就"拿空 + 按间隔回充"。
+ * 放在组件外面定义：不然父组件每敲一个数字都会重建组件、输入框会掉焦点。
+ */
+function SupplyParams({
+  label,
+  kind,
+  rows,
+  perVisit,
+  draft,
+  onPatch,
+  onRemove,
+}: {
+  label: string;
+  kind: FacilityKind;
+  rows: { f: DraftFacilityRow; index: number }[];
+  perVisit: number;
+  draft: MapDraft;
+  onPatch: (index: number, patch: Partial<DraftFacilityRow>) => void;
+  onRemove: (x: number, y: number) => void;
+}) {
+  if (rows.length === 0) {
+    return <div className="hint">还没有{label}。用元素盘里的「{label}」往地图上拖（镜像锁定会一次放 4 个）。</div>;
+  }
+  return (
+    <table className="table table-dense">
+      <thead>
+        <tr>
+          <th>坐标</th>
+          <th>容量（留空 = 无限）</th>
+          <th>初始库存</th>
+          <th>每 N 轮 +1</th>
+          <th>一次补给</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(({ f, index }, i) => {
+          const capacity = f.capacity;
+          const perRound = capacity === undefined ? "无限" : `${(1 / Math.max(1, f.regenEveryRounds ?? 4)).toFixed(2)}/轮`;
+          return (
+            <tr key={`${kind}-${f.x},${f.y}-${i}`}>
+              <td className="mono">
+                ({f.x},{f.y})
+              </td>
+              <td>
+                <input
+                  type="number"
+                  min={1}
+                  style={{ width: 90 }}
+                  placeholder="无限"
+                  value={capacity ?? ""}
+                  onChange={(e) => {
+                    const raw = e.target.value.trim();
+                    // 清空输入框 = 回到无限供给（连同初始量与刷新间隔一起丢掉）
+                    if (raw === "") return onPatch(index, { capacity: undefined, initial: undefined, regenEveryRounds: undefined });
+                    const n = Math.max(1, Math.round(Number(raw) || 1));
+                    onPatch(index, { capacity: n, initial: Math.min(f.initial ?? n, n), regenEveryRounds: f.regenEveryRounds ?? 4 });
+                  }}
+                />
+              </td>
+              {(["initial", "regenEveryRounds"] as const).map((key) => (
+                <td key={key}>
+                  <input
+                    type="number"
+                    min={key === "initial" ? 0 : 1}
+                    style={{ width: 70 }}
+                    disabled={capacity === undefined}
+                    value={capacity === undefined ? "" : (f[key] ?? (key === "initial" ? capacity : 4))}
+                    onChange={(e) => onPatch(index, { [key]: Math.max(key === "initial" ? 0 : 1, Math.round(Number(e.target.value) || 0)) })}
+                  />
+                </td>
+              ))}
+              <td className="mono small">
+                {capacity === undefined ? "点上有分就能一直补给" : `${perRound} · 一次最多 ${Math.min(perVisit, capacity)}`}
+              </td>
+              <td>
+                <button className="btn btn-sm" onClick={() => onRemove(f.x, f.y)}>
+                  删除
+                </button>
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+/** 补给点行的形状（与 mapDraft 的 DraftFacility 一致，这里只用到这几个字段） */
+type DraftFacilityRow = { kind: FacilityKind; x: number; y: number; capacity?: number; initial?: number; regenEveryRounds?: number };

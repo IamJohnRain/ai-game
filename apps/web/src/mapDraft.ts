@@ -10,7 +10,7 @@
 //
 // 镜像：validateMap() 要求横竖都镜像对称（四角等价 = 座次公平）。编辑器默认开启"镜像锁定"——
 // 一次操作同时作用于 4 个镜像格；要自由绘制就切成"自由绘制"，但保存前必须自己把图修对称（校验面板会报）。
-import type { GameMap, ResourceNode } from "@ai-game/protocol";
+import { DEFAULT_RULESET, type GameMap, type MapTuning, type ResourceNode } from "@ai-game/protocol";
 
 export type TerrainChar = "." | "#" | "~" | "f";
 export type FacilityKind = "spawn" | "ammo" | "fuel" | "resource" | "deposit";
@@ -21,7 +21,8 @@ export interface DraftFacility {
   kind: FacilityKind;
   x: number;
   y: number;
-  /** 资源点专有参数（其它设施忽略） */
+  /** 资源点与补给点共用：容量 / 初始量 / 每 N 轮 +1。
+   *  补给点**不写容量 = 无限供给**（历史行为）；资源点必须有容量（缺省按 10/10/4 填） */
   capacity?: number;
   initial?: number;
   regenEveryRounds?: number;
@@ -40,7 +41,16 @@ export interface MapDraft {
   /** 1v1 使用的两个出生点序号（1 基，指向 facilities 里 spawn 的出现顺序） */
   spawnsFor1v1: [number, number];
   mirror: MirrorMode;
+  /** 车辆参数：null = 全部跟随 RULES；填了就写进地图 JSON 的 tuning（载弹 0 = 禁止相互攻击） */
+  tuning: MapTuning | null;
 }
+
+/** 开启"车辆参数"时的默认值：载弹 5（省着打）、载货与血量沿用规则 */
+export const DEFAULT_TUNING: Required<MapTuning> = {
+  hpMax: DEFAULT_RULESET.hpMax,
+  ammoMax: 5,
+  cargoMax: DEFAULT_RULESET.cargoMax,
+};
 
 export const TERRAIN_CHARS: TerrainChar[] = [".", "#", "~", "f"];
 
@@ -100,6 +110,8 @@ export function emptyDraft(width = 21, height = 21, mapId = "my-map"): MapDraft 
     facilities: [],
     spawnsFor1v1: [1, 2],
     mirror: "HV",
+    // 新图默认带着车辆参数（载弹 5）：想完全跟随规则就把这一栏关掉
+    tuning: { ...DEFAULT_TUNING },
   };
 }
 
@@ -118,8 +130,14 @@ export function draftFromMap(map: GameMap): MapDraft {
   const spawns = map.spawns.map((p) => ({ kind: "spawn" as FacilityKind, x: p.x, y: p.y }));
   const facilities: DraftFacility[] = [
     ...spawns,
-    ...map.ammoDepots.map((p) => ({ kind: "ammo" as FacilityKind, x: p.x, y: p.y })),
-    ...map.fuelStations.map((p) => ({ kind: "fuel" as FacilityKind, x: p.x, y: p.y })),
+    ...map.ammoDepots.map((p) => ({
+      kind: "ammo" as FacilityKind, x: p.x, y: p.y,
+      capacity: p.capacity, initial: p.initial, regenEveryRounds: p.regenEveryRounds,
+    })),
+    ...map.fuelStations.map((p) => ({
+      kind: "fuel" as FacilityKind, x: p.x, y: p.y,
+      capacity: p.capacity, initial: p.initial, regenEveryRounds: p.regenEveryRounds,
+    })),
     ...map.resourceNodes.map((n) => ({
       kind: "resource" as FacilityKind, x: n.x, y: n.y,
       capacity: n.capacity, initial: n.initial, regenEveryRounds: n.regenEveryRounds, nodeKind: n.kind,
@@ -139,6 +157,8 @@ export function draftFromMap(map: GameMap): MapDraft {
     facilities,
     spawnsFor1v1: s1v1,
     mirror: "none", // 导入的图已经是成品，默认不强制镜像（免得一画就把原图改形）
+    // 导入时**不**凭空给图加车辆参数：只有原图确实写了才带进来（其余留空 = 跟随规则）
+    tuning: map.tuning ? { ...DEFAULT_TUNING, ...map.tuning } : null,
   };
 }
 
@@ -304,6 +324,26 @@ export function setNodeParams(draft: MapDraft, index: number, patch: Partial<Dra
   return next;
 }
 
+/** 车辆参数：传 null = 关掉（跟随 RULES），传 patch = 开启并覆盖对应字段 */
+export function setTuning(draft: MapDraft, patch: Partial<MapTuning> | null): MapDraft {
+  const next = clone(draft);
+  next.tuning = patch === null ? null : { ...DEFAULT_TUNING, ...(next.tuning ?? {}), ...patch };
+  return next;
+}
+
+/** 补给点参数：capacity 传 undefined 就整块清掉（回到"无限供给"） */
+export function setSupplyParams(draft: MapDraft, index: number, patch: Partial<DraftFacility>): MapDraft {
+  const next = clone(draft);
+  const f = next.facilities[index];
+  if (!f) return draft;
+  Object.assign(f, patch);
+  if (f.capacity === undefined) {
+    delete f.initial;
+    delete f.regenEveryRounds;
+  }
+  return next;
+}
+
 export function clearFacilities(draft: MapDraft, kind?: FacilityKind): MapDraft {
   const next = clone(draft);
   next.facilities = kind ? next.facilities.filter((f) => f.kind !== kind) : [];
@@ -418,6 +458,18 @@ export function toMap(draft: MapDraft): GameMap {
     clampIndex(draft.spawnsFor1v1[1], spawns.length),
   ];
   if (spawns.length >= 2 && pair[0] === pair[1]) pair[1] = pair[0] === 1 ? 2 : 1;
+  /** 补给点 → 权威坐标对象：写了容量才带容量三件套，否则就是"无限供给"（与地图 schema 一致） */
+  const supplyPoints = (kind: FacilityKind) => draft.facilities
+    .filter((f) => f.kind === kind)
+    .map((f) => {
+      if (f.capacity === undefined) return { x: f.x, y: f.y };
+      const capacity = Math.max(1, Math.round(f.capacity));
+      return {
+        x: f.x, y: f.y, capacity,
+        initial: Math.max(0, Math.min(capacity, Math.round(f.initial ?? capacity))),
+        regenEveryRounds: Math.max(1, Math.round(f.regenEveryRounds ?? 4)),
+      };
+    });
   return {
     mapId: draft.mapId,
     version: Math.max(1, Math.round(draft.version)),
@@ -428,10 +480,11 @@ export function toMap(draft: MapDraft): GameMap {
     grid: rows.map((r) => r.join("")),
     spawns,
     spawnsFor1v1: pair,
-    ammoDepots: draft.facilities.filter((f) => f.kind === "ammo").map((f) => ({ x: f.x, y: f.y })),
-    fuelStations: draft.facilities.filter((f) => f.kind === "fuel").map((f) => ({ x: f.x, y: f.y })),
+    ammoDepots: supplyPoints("ammo"),
+    fuelStations: supplyPoints("fuel"),
     resourceNodes: nodes,
     depositPoints: draft.facilities.filter((f) => f.kind === "deposit").map((f) => ({ x: f.x, y: f.y })),
+    ...(draft.tuning ? { tuning: draft.tuning } : {}),
   };
 }
 

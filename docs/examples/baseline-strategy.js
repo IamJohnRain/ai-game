@@ -56,8 +56,22 @@ function pickStocked(nodes, state, from) {
 }
 
 function nearestFuel(from) { return pickNearest(ALL_FUEL, from); }
-function nearestDepot(from) { return pickNearest(ALL_DEPOT, from); }
 function nearestDeposit(from) { return pickNearest(ALL_DEPOSIT, from); }
+
+// 补给点可能有库存（地图给弹药点/加油点设了容量）：remaining 为 null = 无限供给或看不见；
+// 已知采空的点不要再去（去了也是无效动作），挑点时优先跳过。
+function stockAt(list, at) {
+  const p = list.filter(function (q) { return q.x === at.x && q.y === at.y; })[0];
+  return p ? p.remaining : null;
+}
+function hasStock(stock) { return stock === null || stock > 0; }
+
+function nearestDepot(from, state) {
+  const stocked = ALL_DEPOT.filter(function (d) {
+    return hasStock(state ? stockAt(state.ammoDepots, d) : null);
+  });
+  return pickNearest(stocked.length ? stocked : ALL_DEPOT, from);
+}
 
 // 燃油是否紧张到必须先加油：连走到最近加油点都不够
 function fuelTight(self, from) {
@@ -131,10 +145,16 @@ function chooseNodeTarget(state) {
   return pickStocked(first, state, self.pos) || pickStocked(second, state, self.pos) || HOME_NODE;
 }
 
+// 装到"再来一次装弹就满"就收手；地图把载弹上限压得比一次装弹量还小时，直接装到上限。
+// 上限一律读 state.self（地图可以用 MAP.tuning 改小载弹/载货上限），别用 RULES 的同名字段。
+function ammoStopOf(self) {
+  return self.ammoMax > RULES.loadAmmoPerAction ? self.ammoMax - RULES.loadAmmoPerAction : self.ammoMax - 1;
+}
+
 // 选定任务（只在没有任务时调用）
 function pickMission(state) {
   const self = state.self;
-  if (self.cargo >= self.cargoMax) {
+  if (self.cargoMax > 0 && self.cargo >= self.cargoMax) {
     const d = nearestDeposit(self.pos);
     return { kind: "deposit", x: d.x, y: d.y };
   }
@@ -142,9 +162,9 @@ function pickMission(state) {
     const f = nearestFuel(self.pos);
     return { kind: "fuel", x: f.x, y: f.y };
   }
-  // 弹药见底必须补：小地图上"顺路补弹"不成立，所以用绝对阈值
-  if (self.ammo <= 2) {
-    const a = nearestDepot(self.pos);
+  // 弹药见底必须补：小地图上"顺路补弹"不成立，所以用绝对阈值（载弹上限 0 的图直接跳过）
+  if (self.ammoMax > 0 && self.ammo <= 2) {
+    const a = nearestDepot(self.pos, state);
     if (a) return { kind: "ammo", x: a.x, y: a.y };
   }
   const node = chooseNodeTarget(state);
@@ -174,14 +194,23 @@ function onTurn(state) {
       acts.push({ type: "deposit" }); ap -= 1; mission = null; // 提交后货舱清空
     }
     while (ap > 0 && API.isFuel(pos.x, pos.y) && self.fuel <= self.fuelMax - 12) {
-      const add = Math.min(RULES.refuelPerAction, self.fuelMax - self.fuel);
+      const fuelView = state.fuelStations.filter(function (q) { return q.x === pos.x && q.y === pos.y; })[0];
+      const stock = fuelView ? fuelView.remaining : null;
+      if (stock !== null && stock <= 0) break; // 空库存：别刷无效动作，等回充
+      const add = Math.min(RULES.refuelPerAction, self.fuelMax - self.fuel, stock === null ? Infinity : stock);
       if (add <= 0) break;
+      if (fuelView && fuelView.remaining !== null) fuelView.remaining = Math.max(0, fuelView.remaining - add);
       acts.push({ type: "refuel" }); ap -= 1; self.fuel += add;
       if (mission && mission.kind === "fuel") mission = null;
     }
-    while (ap > 0 && API.isAmmo(pos.x, pos.y) && self.ammo <= RULES.ammoMax - 6) {
-      const add = Math.min(RULES.loadAmmoPerAction, RULES.ammoMax - self.ammo);
+    const ammoStop = ammoStopOf(self);
+    while (ap > 0 && API.isAmmo(pos.x, pos.y) && self.ammo <= ammoStop && self.ammoMax > 0) {
+      const depotView = state.ammoDepots.filter(function (q) { return q.x === pos.x && q.y === pos.y; })[0];
+      const stock = depotView ? depotView.remaining : null;
+      if (stock !== null && stock <= 0) break; // 空库存：别刷无效动作，等回充
+      const add = Math.min(RULES.loadAmmoPerAction, self.ammoMax - self.ammo, stock === null ? Infinity : stock);
       if (add <= 0) break;
+      if (depotView && depotView.remaining !== null) depotView.remaining = Math.max(0, depotView.remaining - add);
       acts.push({ type: "loadAmmo" }); ap -= 1; self.ammo += add;
       if (mission && mission.kind === "ammo") mission = null;
     }
@@ -215,11 +244,14 @@ function onTurn(state) {
           // 到了但活干不成（例如资源点被别人采空、货舱已空）→ 放弃任务，下回合重选
           const nodeView = mission.kind === "node"
             ? state.resourceNodes.filter(function (r) { return r.id === mission.id; })[0] : null;
-          const pointless =
+          const emptySupply =
+            (mission.kind === "ammo" && !hasStock(stockAt(state.ammoDepots, mission))) ||
+            (mission.kind === "fuel" && !hasStock(stockAt(state.fuelStations, mission)));
+          const pointless = emptySupply ||
             (mission.kind === "node" && nodeView && nodeView.remaining === 0) ||
             (mission.kind === "deposit" && self.cargo === 0) ||
             (mission.kind === "fuel" && self.fuel > self.fuelMax - 12) ||
-            (mission.kind === "ammo" && self.ammo > RULES.ammoMax - 6);
+            (mission.kind === "ammo" && (self.ammoMax === 0 || self.ammo > ammoStopOf(self)));
           mission = null;
           if (!pointless) return acts.length ? acts.slice(0, RULES.apPerTurn) : [{ type: "wait" }];
         } else {

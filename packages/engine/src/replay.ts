@@ -13,6 +13,8 @@ export interface TankView {
   spawn: { x: number; y: number };
 }
 export interface NodeViewState { id: string; x: number; y: number; capacity: number; remaining: number }
+/** 补给点（弹药点/加油点）：capacity=null 是无限供给（地图没写容量）；否则 remaining 就是当前库存 */
+export interface SupplyViewState { kind: "ammo" | "fuel"; index: number; x: number; y: number; capacity: number | null; remaining: number | null }
 export interface LogEntry { turn: number; round: number; seat: number | null; text: string; kind: MatchEvent["t"] }
 
 export interface BattleView {
@@ -20,11 +22,22 @@ export interface BattleView {
   turn: number;
   tanks: Record<number, TankView>;
   nodes: Record<string, NodeViewState>;
+  supplies: SupplyViewState[];
   log: LogEntry[];
   lastFire: { seat: number; target: { x: number; y: number }; hit: boolean; turn: number } | null;
 }
 
 const TANK_LABEL = (seat: number) => `P${seat}`;
+
+/** 地图 → 补给点初始视图（与引擎 runMatch 的 initSupply 同一套口径：缺 initial 就是满库存） */
+export function initialSupplies(map: GameMap): SupplyViewState[] {
+  const wrap = (kind: "ammo" | "fuel", list: { x: number; y: number; capacity?: number; initial?: number }[]) =>
+    list.map((p, index) => {
+      const capacity = p.capacity ?? null;
+      return { kind, index, x: p.x, y: p.y, capacity, remaining: capacity === null ? null : (p.initial ?? capacity) };
+    });
+  return [...wrap("ammo", map.ammoDepots), ...wrap("fuel", map.fuelStations)];
+}
 
 export function createBattleView(map: GameMap, rules: Ruleset, names: Record<number, string> = {}, hashes: Record<number, string> = {}): BattleView {
   const tanks: Record<number, TankView> = {};
@@ -41,7 +54,7 @@ export function createBattleView(map: GameMap, rules: Ruleset, names: Record<num
   });
   const nodes: Record<string, NodeViewState> = {};
   for (const n of map.resourceNodes) nodes[n.id] = { id: n.id, x: n.x, y: n.y, capacity: n.capacity, remaining: n.initial };
-  return { round: 0, turn: 0, tanks, nodes, log: [], lastFire: null };
+  return { round: 0, turn: 0, tanks, nodes, supplies: initialSupplies(map), log: [], lastFire: null };
 }
 
 export function applyEvent(view: BattleView, e: MatchEvent, rules: Ruleset): void {
@@ -100,11 +113,13 @@ export function applyEvent(view: BattleView, e: MatchEvent, rules: Ruleset): voi
     case "load_ammo": {
       const t = view.tanks[e.seat];
       if (t) { t.ammo = e.ammoAfter; t.score = e.scoreAfter; }
+      applySupplyUse(view, "ammo", e.depotIndex, e.depotRemainingAfter);
       return;
     }
     case "refuel": {
       const t = view.tanks[e.seat];
       if (t) { t.fuel = e.fuelAfter; t.score = e.scoreAfter; }
+      applySupplyUse(view, "fuel", e.depotIndex, e.depotRemainingAfter);
       return;
     }
     case "death": {
@@ -150,6 +165,11 @@ export function applyEvent(view: BattleView, e: MatchEvent, rules: Ruleset): voi
       if (n) n.remaining = e.remainingAfter;
       return;
     }
+    case "supply_regen": {
+      const s = view.supplies.find((x) => x.kind === e.kind && x.index === e.index);
+      if (s) s.remaining = e.remainingAfter;
+      return;
+    }
     case "match_end": {
       view.log.push({ turn: view.turn, round: view.round, seat: null, kind: e.t, text: `🏁 比赛结束：${e.ranking.map((r) => `#${r.rank} P${r.seat}(${r.score})`).join(" ")}` });
       return;
@@ -161,6 +181,13 @@ export function reduceEvents(map: GameMap, rules: Ruleset, events: MatchEvent[])
   const view = createBattleView(map, rules);
   for (const e of events) applyEvent(view, e, rules);
   return view;
+}
+
+/** 装弹/加油把补给点拿掉了一些：事件里带着"用完之后剩多少"，照抄即可（无库存的地图不带这两个字段） */
+function applySupplyUse(view: BattleView, kind: "ammo" | "fuel", index?: number, remainingAfter?: number): void {
+  if (index === undefined || remainingAfter === undefined) return;
+  const s = view.supplies.find((x) => x.kind === kind && x.index === index);
+  if (s) s.remaining = remainingAfter;
 }
 
 /** 战争迷雾：从某个位置可见的格集合（供观战"座位视角"使用） */
