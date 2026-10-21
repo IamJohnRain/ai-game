@@ -1724,3 +1724,38 @@ textarea {
   color: var(--text-dim);
   font-size: 13px;
 }
+
+/* 全屏观战：控制条留在里面（全屏里照样能切机位/关音效），战场吃掉剩下所有高度。
+   二维棋盘自带 aspect-ratio，但这里主尺寸被 flex 定死，它会按格子数自己居中留边。 */
+.stage-fs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  padding: 10px 12px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+/* 浏览器不给元素全屏（例如 iPhone Safari）时的退路：铺满视口的浮层（z-index 盖过顶栏） */
+.stage-fs-fixed {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+}
+
+.stage-fs .stage-bar,
+.stage-fs .legend {
+  flex: none;
+}
+
+.stage-fs .board,
+.stage-fs .board-canvas,
+.stage-fs .scene3d {
+  flex: 1;
+  min-height: 0;
+}
+
+.stage-fs .scene3d {
+  height: auto;
+}

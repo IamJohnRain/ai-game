@@ -37,6 +37,8 @@ export interface BattleStageProps {
 }
 
 type RenderMode = "2d" | "3d";
+/** 全屏形态：native = 浏览器全屏 API；overlay = 拿不到 API（如 iPhone Safari）时用铺满视口的浮层顶上 */
+type FullscreenMode = "off" | "native" | "overlay";
 
 const LS_MODE = "ai-game.stage.mode";
 const LS_SOUND = "ai-game.sound.on";
@@ -58,6 +60,8 @@ export function BattleStage(props: BattleStageProps) {
   const listenerRef = useRef<SceneListener | null>(null);
   const soundRef = useRef(sound);
   soundRef.current = sound;
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const [fs, setFs] = useState<FullscreenMode>("off");
   const seats = useMemo(() => Object.keys(props.view.tanks).map(Number).sort((a, b) => a - b), [props.version, props.view]);
 
   // ---- 音效：主音量、首次手势解锁 ----
@@ -76,6 +80,79 @@ export function BattleStage(props: BattleStageProps) {
       window.removeEventListener("keydown", unlock);
     };
   }, []);
+
+  // ---- 全屏观战 ----
+  // 全屏的对象是整块 stage（控制条 + 战场）而不是画布本身：全屏里仍然要能切机位、关音效，
+  // 而"退出"这件事交给浏览器自己的 Esc（浮层模式下我们自己接 Esc）。
+  const toggleFullscreen = useCallback(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    if (fs === "native") {
+      const doc = document as Document & { webkitExitFullscreen?: () => void };
+      (document.exitFullscreen ?? doc.webkitExitFullscreen)?.call(document);
+      return;
+    }
+    if (fs === "overlay") {
+      setFs("off");
+      return;
+    }
+    // 前缀 API 的类型各不相同，统一按"可传可不传参数"取用
+    const host = el as unknown as {
+      requestFullscreen?: (opts?: FullscreenOptions) => Promise<void> | void;
+      webkitRequestFullscreen?: () => Promise<void> | void;
+    };
+    const ask = host.requestFullscreen ?? host.webkitRequestFullscreen;
+    if (!ask) {
+      setFs("overlay");
+      return;
+    }
+    Promise.resolve(ask.call(el, { navigationUI: "hide" })).then(
+      () => setFs("native"),
+      // 被策略拒绝（比如没有用户手势）也别白按一下：照样铺满视口
+      () => setFs("overlay"),
+    );
+  }, [fs]);
+
+  // 全屏可能被 Esc/F11 或者浏览器自己退出，且不一定经过我们的按钮：用事件把状态追回来
+  useEffect(() => {
+    const sync = () => {
+      const active = Boolean(document.fullscreenElement) && document.fullscreenElement === stageRef.current;
+      setFs((prev) => (active ? "native" : prev === "native" ? "off" : prev));
+    };
+    document.addEventListener("fullscreenchange", sync);
+    document.addEventListener("webkitfullscreenchange", sync);
+    return () => {
+      document.removeEventListener("fullscreenchange", sync);
+      document.removeEventListener("webkitfullscreenchange", sync);
+    };
+  }, []);
+
+  // 浮层模式盖住了整页：禁掉背后的滚动，免得全屏里还能拖动页面
+  useEffect(() => {
+    if (fs !== "overlay") return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [fs]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.repeat) return; // 按住不放别把全屏开开关关
+      if (e.ctrlKey || e.metaKey || e.altKey) return; // Ctrl+F 之类是浏览器自己的事
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT")) return;
+      if (e.code === "KeyF") {
+        e.preventDefault();
+        toggleFullscreen();
+      } else if (e.code === "Escape" && fs === "overlay") {
+        setFs("off"); // 原生全屏的 Esc 由浏览器接管，只有浮层需要我们收
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [toggleFullscreen, fs]);
 
   // ---- 事件批次 → 指令（画面与声音共用同一份，避免两边理解不一致） ----
   const snap = props.batchCount > MAX_FX_EVENTS;
@@ -151,6 +228,7 @@ export function BattleStage(props: BattleStageProps) {
   };
 
   const three = mode === "3d" && webgl;
+  const isFs = fs !== "off";
   const hint = three
     ? camera.kind === "orbit"
       ? "左键拖拽转视角 · 右键/Shift 拖拽平移 · 滚轮缩放 · 双击回正"
@@ -160,7 +238,7 @@ export function BattleStage(props: BattleStageProps) {
     : "点击「3D 战场」可切换成可自由转动的立体视角";
 
   return (
-    <div className="stage">
+    <div className={`stage${isFs ? " stage-fs" : ""}${fs === "overlay" ? " stage-fs-fixed" : ""}`} ref={stageRef}>
       <div className="stage-bar">
         <div className="control-group">
           <span className="field-label">呈现</span>
@@ -202,6 +280,16 @@ export function BattleStage(props: BattleStageProps) {
             ))}
           </div>
         ) : null}
+
+        <div className="control-group">
+          <button
+            className={`chip ${isFs ? "chip-on" : ""}`}
+            onClick={toggleFullscreen}
+            title={isFs ? "退出全屏（Esc 或再按一次 F）" : "全屏观战：只留战场，看得更大（快捷键 F）"}
+          >
+            {isFs ? "⤢ 退出全屏" : "⛶ 全屏"}
+          </button>
+        </div>
 
         <div className="control-group">
           <button

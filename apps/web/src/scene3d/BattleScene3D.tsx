@@ -229,6 +229,8 @@ export function BattleScene3D(props: BattleScene3DProps) {
       camera.updateProjectionMatrix();
       state.heightPx = h;
       state.baseDist = fitDistance(spanX, spanZ, ORBIT_FOV, camera.aspect);
+      // 尺寸变了就补一帧：rAF 被节流时（后台标签页）画面会停在旧尺寸上，进全屏尤其明显
+      poke(state, propsRef.current, true);
     };
     resize();
     const ro = new ResizeObserver(resize);
@@ -407,9 +409,10 @@ export function BattleScene3D(props: BattleScene3DProps) {
  * 而回放的节拍（定时器）还在走 —— 等用户切回前台，画面会停在几百个事件之前的那一幕。
  * 这里只在"rAF 超过 120ms 没跑"时才手动推一帧，并且直接落位；前台下 rAF 每秒 60 次，这个分支不会触发。
  */
-function poke(state: SceneState, props: BattleScene3DProps): void {
+function poke(state: SceneState, props: BattleScene3DProps, force = false): void {
   const now = performance.now();
-  if (now - state.lastFrameAt < 120) return;
+  // force：尺寸变化（进/出全屏）这类"必须立刻看到结果"的场合，跳过节流直接画一帧
+  if (!force && now - state.lastFrameAt < 120) return;
   state.last = now;
   state.lastFrameAt = now;
   state.snap = true; // 停了这么久，别让坦克从旧位置"滑"过来
