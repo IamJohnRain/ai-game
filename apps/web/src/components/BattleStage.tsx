@@ -7,9 +7,11 @@
 //      因此音效在这里统一驱动，二维/三维都听得到；
 //   3) 三维依赖 three.js（几百 KB）—— 用 React.lazy 懒加载，只选二维的人一个字节都不用下。
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { GameMap, MatchEvent, Ruleset } from "@ai-game/protocol";
+import type { GameMap, MatchEvent, PlayerStats, Ruleset } from "@ai-game/protocol";
 import type { BattleView, Terrain } from "@ai-game/engine";
+import type { MatchPlayer } from "../api";
 import { BattleCanvas, BattleLegend } from "./BattleCanvas";
+import { ScoreCards } from "./ScoreCards";
 import { sfx, type SfxPlayOptions } from "../sfx";
 import { MAX_FX_EVENTS } from "../battleState";
 import { impactSound, planFx, soundFor, type FxCommand, type GridPos } from "../scene3d/fxPlan";
@@ -34,6 +36,10 @@ export interface BattleStageProps {
   version: number;
   /** 关掉三维入口（例如未来的嵌入式展示）；默认开启 */
   allow3d?: boolean;
+  /** 座位卡用的参赛者信息（模型名、状态、校验）；全屏时悬浮在左上角 */
+  players?: MatchPlayer[];
+  /** 服务端名次（观战有，回放没有）；缺省时按当前分数自排名 */
+  ranking?: PlayerStats[];
 }
 
 type RenderMode = "2d" | "3d";
@@ -319,34 +325,44 @@ export function BattleStage(props: BattleStageProps) {
         </div>
       </div>
 
-      {three ? (
-        <div className="board">
-          <Suspense fallback={<div className="scene3d scene3d-loading">正在加载三维战场 …</div>}>
-            <BattleScene3D
-              map={props.map}
-              terrain={props.terrain}
-              rules={props.rules}
-              view={props.view}
-              commands={commands}
-              snap={snap}
-              viewpoint={props.viewpoint}
-              camera={camera}
-              version={props.version}
-              onListener={onListener}
-            />
-          </Suspense>
-          <BattleLegend />
-        </div>
-      ) : (
-        <BattleCanvas
-          map={props.map}
-          terrain={props.terrain}
-          view={props.view}
-          rules={props.rules}
-          viewpoint={props.viewpoint}
-          version={props.version}
-        />
-      )}
+      {/* 全屏里侧栏（赛事信息、得分看板、事件流）都看不见了：得分的座位卡在这里补一份，
+          悬浮在战场左上角，二维/三维都跟着走 */}
+      <div className="stage-view">
+        {isFs ? (
+          <aside className="seat-float cards-narrow" aria-label="得分看板（全屏悬浮）">
+            <ScoreCards view={props.view} rules={props.rules} players={props.players} ranking={props.ranking} />
+          </aside>
+        ) : null}
+
+        {three ? (
+          <div className="board">
+            <Suspense fallback={<div className="scene3d scene3d-loading">正在加载三维战场 …</div>}>
+              <BattleScene3D
+                map={props.map}
+                terrain={props.terrain}
+                rules={props.rules}
+                view={props.view}
+                commands={commands}
+                snap={snap}
+                viewpoint={props.viewpoint}
+                camera={camera}
+                version={props.version}
+                onListener={onListener}
+              />
+            </Suspense>
+            <BattleLegend />
+          </div>
+        ) : (
+          <BattleCanvas
+            map={props.map}
+            terrain={props.terrain}
+            view={props.view}
+            rules={props.rules}
+            viewpoint={props.viewpoint}
+            version={props.version}
+          />
+        )}
+      </div>
     </div>
   );
 }

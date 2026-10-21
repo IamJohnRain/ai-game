@@ -819,25 +819,26 @@ textarea {
   box-shadow: var(--shadow);
 }
 
-/* 左侧得分栏：卡片一律纵向排布、宽度收窄到栏宽；窄卡片里把次要信息折行显示 */
-.watch-scores .cards {
+/* 窄栏里的座位卡（观战/回放的左侧看板，以及全屏时悬浮在战场左上角的那一份）：
+   卡片一律纵向排布、宽度收窄；窄卡放不下的次要信息折行显示 */
+.cards-narrow .cards {
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
-.watch-scores .card {
+.cards-narrow .card {
   padding: 10px 12px;
   gap: 7px;
 }
 
-.watch-scores .card-head {
+.cards-narrow .card-head {
   flex-wrap: wrap;
   row-gap: 4px;
 }
 
 /* 窄卡片里让"座位 · 模型名"独占一行并允许折行，避免被徽章挤成省略号 */
-.watch-scores .card-title {
+.cards-narrow .card-title {
   flex: 1 1 100%;
   white-space: normal;
   overflow: visible;
@@ -845,35 +846,35 @@ textarea {
   word-break: break-word;
 }
 
-.watch-scores .card-head .badge {
+.cards-narrow .card-head .badge {
   margin-left: 0;
 }
 
-.watch-scores .card-score {
+.cards-narrow .card-score {
   flex-wrap: wrap;
   gap: 6px 8px;
 }
 
-.watch-scores .score-num {
+.cards-narrow .score-num {
   font-size: 20px;
 }
 
 /* 让"在场/阵亡"自己占一行，别把分数挤变形 */
-.watch-scores .alive-tag {
+.cards-narrow .alive-tag {
   margin-left: 0;
   flex: 1 1 100%;
 }
 
-.watch-scores .card-foot {
+.cards-narrow .card-foot {
   flex-direction: column;
   gap: 3px;
 }
 
-.watch-scores .pbar-label {
+.cards-narrow .pbar-label {
   width: 26px;
 }
 
-.watch-scores .pbar-value {
+.cards-narrow .pbar-value {
   width: 48px;
   font-size: 10px;
 }
@@ -1725,6 +1726,14 @@ textarea {
   font-size: 13px;
 }
 
+/* 战场区域（二维棋盘/三维场景 + 图例）：悬浮卡以它为定位参照 */
+.stage-view {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 /* 全屏观战：控制条留在里面（全屏里照样能切机位/关音效），战场吃掉剩下所有高度。
    二维棋盘自带 aspect-ratio，但这里主尺寸被 flex 定死，它会按格子数自己居中留边。 */
 .stage-fs {
@@ -1749,6 +1758,7 @@ textarea {
   flex: none;
 }
 
+.stage-fs .stage-view,
 .stage-fs .board,
 .stage-fs .board-canvas,
 .stage-fs .scene3d {
@@ -1758,4 +1768,40 @@ textarea {
 
 .stage-fs .scene3d {
   height: auto;
+}
+
+/* 全屏时把双方的座位卡悬浮在战场左上角（侧栏在全屏里看不见了）。
+   半透明压在画面上保证可读，但整体不吃鼠标——三维拖拽转视角不该被它挡住。 */
+.seat-float {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 5;
+  width: 258px;
+  max-height: calc(100% - 20px);
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0.95;
+}
+
+.seat-float .cards {
+  gap: 8px;
+}
+
+.seat-float .card {
+  padding: 8px 10px;
+  gap: 5px;
+  background: rgba(20, 26, 36, 0.88);
+  border-color: var(--border-soft);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+.seat-float .card-foot {
+  font-size: 11px;
+  padding-top: 6px;
+}
+
+.seat-float .pbar-track {
+  height: 6px;
 }

@@ -284,8 +284,8 @@ export function ReplayPage({
 
       {acc && view ? (
         <div className="watch-main">
-          {/* 与观战页同一套布局：得分看板在左侧纵向排布 */}
-          <aside className="watch-scores" aria-label="得分看板">
+          {/* 与观战页同一套布局：得分看板在左侧纵向排布（全屏时同一份卡片会悬浮到战场左上角） */}
+          <aside className="watch-scores cards-narrow" aria-label="得分看板">
             <ScoreCards view={view} rules={bundle.rules} players={bundle.players} />
           </aside>
           <div className="watch-board">
@@ -299,6 +299,7 @@ export function ReplayPage({
               viewpoint={viewpoint}
               onViewpointChange={setViewpoint}
               version={frame}
+              players={bundle.players}
             />
             <div className="board-note">
               当前：第 {view.round} 回合 · 第 {view.turn} 个回合动作（事件 {index} / {bundle.events.length}）。

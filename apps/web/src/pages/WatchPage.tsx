@@ -372,8 +372,8 @@ export function WatchPage({ matchId, onOpen, onGotoTournament }: WatchPageProps)
 
       {acc && view ? (
         <div className="watch-main">
-          {/* 得分看板：挪到左侧、卡片纵向排布（窄卡片一列到底） */}
-          <aside className="watch-scores" aria-label="得分看板">
+          {/* 得分看板：挪到左侧、卡片纵向排布（窄卡片一列到底；全屏时同一份卡片会悬浮到战场左上角） */}
+          <aside className="watch-scores cards-narrow" aria-label="得分看板">
             <ScoreCards view={view} rules={bundle.rules} players={players} ranking={ranking} />
           </aside>
           <div className="watch-board">
@@ -387,6 +387,8 @@ export function WatchPage({ matchId, onOpen, onGotoTournament }: WatchPageProps)
               viewpoint={viewpoint}
               onViewpointChange={setViewpoint}
               version={frame}
+              players={players}
+              ranking={ranking}
             />
             <div className="board-note">
               {viewpoint === null
