@@ -1805,3 +1805,23 @@ textarea {
 .seat-float .pbar-track {
   height: 6px;
 }
+
+/* 矮屏（手机横屏、投屏小窗）：纵向码不下两张卡，改成并排，并省掉"击杀/死亡/提交"那一行 ——
+   分数、在场状态和四条资源条是看战况的必需项，无论如何都要完整可见 */
+@media (max-height: 640px) {
+  .seat-float {
+    width: min(100% - 20px, 560px);
+  }
+
+  .seat-float .cards {
+    flex-direction: row;
+  }
+
+  .seat-float .card {
+    flex: 1 1 0;
+  }
+
+  .seat-float .card-foot {
+    display: none;
+  }
+}
