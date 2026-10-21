@@ -468,20 +468,27 @@ export function BattleCanvas({ map, terrain, view, rules, viewpoint, version }: 
       <div className="board-canvas" ref={wrapRef} style={{ aspectRatio: `${map.width} / ${map.height}` }}>
         <canvas ref={canvasRef} />
       </div>
-      <div className="legend">
-        {Object.entries(TILE_LABEL).map(([ch, label]) => (
-          <span className="legend-item" key={ch}>
-            <img className="legend-icon" src={spriteSrc(TILE_SVG[ch]!)} alt="" />
-            {label}
-          </span>
-        ))}
-        {[1, 2, 3, 4].map((seat) => (
-          <span className="legend-item" key={seat}>
-            <img className="legend-icon" src={spriteSrc(tankSvg(seat))} alt="" />
-            P{seat}
-          </span>
-        ))}
-      </div>
+      <BattleLegend />
+    </div>
+  );
+}
+
+/** 图例：二维棋盘与三维战场共用（地形含义、设施、座位配色是同一套口径） */
+export function BattleLegend() {
+  return (
+    <div className="legend">
+      {Object.entries(TILE_LABEL).map(([ch, label]) => (
+        <span className="legend-item" key={ch}>
+          <img className="legend-icon" src={spriteSrc(TILE_SVG[ch]!)} alt="" />
+          {label}
+        </span>
+      ))}
+      {[1, 2, 3, 4].map((seat) => (
+        <span className="legend-item" key={seat}>
+          <img className="legend-icon" src={spriteSrc(tankSvg(seat))} alt="" />
+          P{seat}
+        </span>
+      ))}
     </div>
   );
 }

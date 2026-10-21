@@ -16,7 +16,7 @@ import {
 } from "../api";
 import { BattleAccumulator } from "../battleState";
 import { openMatchSocket, type ConnectionStatus } from "../ws";
-import { BattleCanvas } from "../components/BattleCanvas";
+import { BattleStage } from "../components/BattleStage";
 import { EventLog } from "../components/EventLog";
 import { ScoreCards } from "../components/ScoreCards";
 import { PhaseBar } from "../components/ProgressBar";
@@ -377,12 +377,15 @@ export function WatchPage({ matchId, onOpen, onGotoTournament }: WatchPageProps)
             <ScoreCards view={view} rules={bundle.rules} players={players} ranking={ranking} />
           </aside>
           <div className="watch-board">
-            <BattleCanvas
+            <BattleStage
               map={bundle.map}
               terrain={acc.terrain}
               view={view}
               rules={bundle.rules}
+              batch={acc.lastApplied}
+              batchCount={acc.lastAppliedCount}
               viewpoint={viewpoint}
+              onViewpointChange={setViewpoint}
               version={frame}
             />
             <div className="board-note">

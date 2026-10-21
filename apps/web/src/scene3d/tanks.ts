@@ -1,0 +1,341 @@
+// apps/web/src/scene3d/tanks.ts —— 三维坦克：车体/炮塔/炮管、朝向推断、平滑插值、阵亡残骸与最后目击
+//
+// 与二维渲染口径一致的三件事（对齐 components/BattleCanvas.tsx）：
+//   1) 事件流里没有"朝向"字段，炮口方向只能从位移推断；这里同样用"上一次的格子"推方向；
+//   2) 阵亡单位不可见，取而代之的是残骸（二维画的是虚线框 + 半透明车体）；
+//   3) 座位视角下，消失的敌人留下"最后目击位置"（二维是虚线圈 + ?），三维里是一个半透明轮廓。
+//
+// 平滑：状态是以事件为节拍跳变的（最快 20 次/秒），直接跟着跳会"瞬移"。
+//   所以位置与朝向都做指数逼近：状态给目标，渲染读当前值，视觉上就是坦克在驶过一个格子。
+import * as THREE from "three";
+import type { TankView } from "@ai-game/engine";
+import { damp, lerpAngle } from "./cameraMath.ts";
+
+/** 车体尺寸：一个格子放得下，且留出缝隙能看出两辆车贴在一起时是两辆 */
+const HULL = { w: 0.62, h: 0.24, d: 0.8 };
+const TRACK_X = 0.33;
+/** 炮口在炮塔局部坐标里的位置（+Z 为车头方向） */
+const MUZZLE_LOCAL = new THREE.Vector3(0, 0, 0.68);
+/** 位置/朝向的收敛速度（每秒）；位置比朝向略快，转弯时看起来像"先到位再转正" */
+const POS_K = 16;
+const YAW_K = 12;
+const TURRET_K = 7;
+
+export interface TankRigInit {
+  seat: number;
+  color: number;
+  shadows: boolean;
+}
+
+export class TankRig {
+  readonly seat: number;
+  readonly group = new THREE.Group();
+  private readonly hull: THREE.Mesh;
+  private readonly tracks: THREE.Mesh[] = [];
+  private readonly turretGroup = new THREE.Group();
+  private readonly wreck: THREE.Group;
+  private readonly ghost: THREE.Group;
+  private readonly marker: THREE.Mesh;
+  private readonly label: THREE.Sprite;
+  private readonly labelCanvas: HTMLCanvasElement;
+  private labelKey = "";
+  private readonly bodyMats: THREE.MeshStandardMaterial[] = [];
+  private readonly edgeMat: THREE.MeshStandardMaterial;
+
+  // —— 动画状态 ——
+  private tx = 0; private tz = 0;           // 目标世界坐标
+  private cx = 0; private cz = 0;           // 当前世界坐标
+  private targetYaw = 0; private yaw = 0;   // 车体朝向
+  private targetTurretYaw = 0; private turretYaw = 0;
+  private turretHoldMs = 0;                 // 开火后炮塔朝目标锁定一会儿
+  private recoil = 0;
+  private flash = 0;
+  private pop = 1;                          // 复活/登场时的缩放动画
+  private dead = false;
+  private ready = false;
+  private lastTile: { x: number; y: number } | null = null;
+
+  constructor(init: TankRigInit) {
+    this.seat = init.seat;
+    this.group.name = `tank-${init.seat}`;
+    const body = new THREE.Color(init.color);
+    const dark = body.clone().multiplyScalar(0.45);
+
+    const mkMat = (color: THREE.Color, roughness: number, metalness: number): THREE.MeshStandardMaterial => {
+      const m = new THREE.MeshStandardMaterial({ color, roughness, metalness, emissive: new THREE.Color(0x000000) });
+      this.bodyMats.push(m);
+      return m;
+    };
+
+    this.hull = new THREE.Mesh(new THREE.BoxGeometry(HULL.w, HULL.h, HULL.d), mkMat(body, 0.55, 0.35));
+    this.hull.position.y = 0.16;
+    this.hull.castShadow = init.shadows;
+
+    const trackGeo = new THREE.BoxGeometry(0.16, 0.26, HULL.d + 0.06);
+    for (const side of [-1, 1]) {
+      const tr = new THREE.Mesh(trackGeo, mkMat(dark, 0.9, 0.1));
+      tr.position.set(side * TRACK_X, 0.13, 0);
+      tr.castShadow = init.shadows;
+      this.tracks.push(tr);
+      this.group.add(tr);
+    }
+
+    const turretMat = mkMat(body.clone().multiplyScalar(1.12), 0.5, 0.45);
+    const turretMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.23, 0.18, 10), turretMat);
+    turretMesh.castShadow = init.shadows;
+    const barrelMat = mkMat(dark.clone().multiplyScalar(1.6), 0.4, 0.6);
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.055, 0.62, 8).rotateX(Math.PI / 2), barrelMat);
+    barrel.position.set(0, 0, 0.36);
+    barrel.castShadow = init.shadows;
+    this.turretGroup.position.y = 0.37;
+    this.turretGroup.add(turretMesh, barrel);
+    this.group.add(this.hull, this.turretGroup);
+
+    // —— 阵亡残骸：车身压扁、颜色焦黑，停在原地直到复活 ——
+    this.edgeMat = mkMat(new THREE.Color(0x2a2a2e), 0.95, 0.05);
+    this.wreck = new THREE.Group();
+    const wreckHull = new THREE.Mesh(new THREE.BoxGeometry(HULL.w * 1.02, 0.16, HULL.d * 0.98), mkMat(new THREE.Color(0x24262b), 0.95, 0.1));
+    wreckHull.position.y = 0.08;
+    const wreckTurret = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.24, 0.14, 10), this.edgeMat);
+    wreckTurret.position.set(0.06, 0.1, -0.05);
+    wreckTurret.rotation.z = 0.5;
+    this.wreck.add(wreckHull, wreckTurret);
+    this.wreck.visible = false;
+    this.wreck.castShadow = init.shadows;
+    this.group.add(this.wreck);
+
+    // —— 最后目击：半透明线框 + 地面虚线圈 ——
+    this.ghost = new THREE.Group();
+    const wire = new THREE.Mesh(
+      new THREE.BoxGeometry(HULL.w * 1.1, HULL.h * 1.3, HULL.d * 1.1),
+      new THREE.MeshBasicMaterial({ color: init.color, wireframe: true, transparent: true, opacity: 0.35 }),
+    );
+    wire.position.y = 0.18;
+    const ghostRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.34, 0.42, 18).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: init.color, transparent: true, opacity: 0.4, side: THREE.DoubleSide }),
+    );
+    ghostRing.position.y = 0.04;
+    this.ghost.add(wire, ghostRing);
+    this.ghost.visible = false;
+    this.group.add(this.ghost);
+
+    // —— 被观察座位自身的标记圈 ——
+    this.marker = new THREE.Mesh(
+      new THREE.RingGeometry(0.44, 0.52, 22).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0xf5c542, transparent: true, opacity: 0.8, side: THREE.DoubleSide }),
+    );
+    this.marker.position.y = 0.05;
+    this.marker.visible = false;
+    this.group.add(this.marker);
+
+    // —— 头顶铭牌：座位号 + 血条（Sprite 永远面向相机，省掉一堆广告牌矩阵） ——
+    this.labelCanvas = document.createElement("canvas");
+    this.labelCanvas.width = 128;
+    this.labelCanvas.height = 56;
+    const tex = new THREE.CanvasTexture(this.labelCanvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    this.label = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, toneMapped: false }));
+    this.label.center.set(0.5, 0);
+    this.label.position.y = 1.05;
+    this.label.scale.set(1.0, 0.44, 1);
+    this.group.add(this.label);
+  }
+
+  /**
+   * 铭牌尺寸随"离相机多远"变：写死世界尺寸的话，全局视角下它只有几个像素（读不出是谁），
+   * 贴脸时又糊住半个屏幕。按距离缩放后，屏幕上基本恒定高度（≈26px）。
+   */
+  setLabelSize(dist: number): void {
+    const h = Math.max(0.34, Math.min(1.7, dist * 0.045));
+    this.label.scale.set(h * (128 / 56), h, 1);
+    this.label.position.y = 0.95 + h * 0.42;
+  }
+
+  /** 是否已经拿到过位置（没拿到之前不要把它当成"在原点"渲染） */
+  get placed(): boolean {
+    return this.ready;
+  }
+
+  /** 当前世界坐标（相机跟随用） */
+  position(out: THREE.Vector3): THREE.Vector3 {
+    return out.set(this.cx, 0, this.cz);
+  }
+
+  get bodyYaw(): number {
+    return this.yaw;
+  }
+
+  get turretYawValue(): number {
+    return this.turretYaw;
+  }
+
+  get isDead(): boolean {
+    return this.dead;
+  }
+
+  /**
+   * 每帧同步目标位姿。格子变化 → 推断朝向；
+   * snap=true（拖动时间轴/跳转）直接落位，不做插值——否则会看到坦克横穿地图。
+   */
+  setTarget(t: TankView, x: number, z: number, snap: boolean): void {
+    this.tx = x;
+    this.tz = z;
+    if (!this.ready || snap) {
+      this.cx = x; this.cz = z;
+      this.ready = true;
+      this.lastTile = { x: t.x, y: t.y };
+    } else {
+      const prev = this.lastTile;
+      if (prev && (prev.x !== t.x || prev.y !== t.y)) {
+        const yaw = Math.atan2(Math.sign(t.x - prev.x), Math.sign(t.y - prev.y));
+        if (Number.isFinite(yaw)) this.targetYaw = yaw;
+      }
+      this.lastTile = { x: t.x, y: t.y };
+    }
+  }
+
+  /** 开火：炮塔转向目标并后坐（炮口方向是玩法信息，这里顺带把它"演"出来） */
+  aimAt(x: number, z: number): void {
+    const yaw = Math.atan2(x - this.cx, z - this.cz);
+    if (Number.isFinite(yaw)) {
+      this.targetTurretYaw = yaw;
+      this.turretHoldMs = 900;
+    }
+    this.recoil = 1;
+  }
+
+  /** 被命中：整车闪一下白 */
+  hit(): void {
+    this.flash = 1;
+  }
+
+  setDead(dead: boolean): void {
+    if (dead === this.dead) return;
+    this.dead = dead;
+    if (dead) {
+      this.wreck.visible = true;
+      this.wreck.position.set(this.cx, 0, this.cz);
+    } else {
+      // 复活：从地面"弹"出来，给玩家一个明确的重新入场信号
+      this.wreck.visible = false;
+      this.pop = 0;
+    }
+  }
+
+  /** 是否被淘汰（车辆隐藏，只留铭牌与标记圈）。注意 group.visible 由场景统一控制（迷雾），这里不碰。 */
+  setDisqualified(flag: boolean): void {
+    for (const m of this.bodyMats) {
+      m.transparent = flag;
+      m.opacity = flag ? 0.45 : 1;
+    }
+    this.hull.visible = !flag;
+    this.turretGroup.visible = !flag;
+    for (const tr of this.tracks) tr.visible = !flag;
+  }
+
+  setObserver(flag: boolean): void {
+    this.marker.visible = flag;
+  }
+
+  /** 最后目击位置（座位视角下敌人消失时留在这里） */
+  setGhost(x: number | null, z = 0): void {
+    if (x === null) {
+      this.ghost.visible = false;
+      return;
+    }
+    this.ghost.visible = true;
+    this.ghost.position.set(x, 0, z);
+  }
+
+  /** 头顶铭牌：座位号 + 血条；内容不变就不重画纹理 */
+  setLabel(hpFrac: number, tone: "self" | "enemy" | "dead"): void {
+    const hp = Math.round(Math.max(0, Math.min(1, hpFrac)) * 10);
+    const key = `${this.seat}|${hp}|${tone}`;
+    if (key === this.labelKey) return;
+    this.labelKey = key;
+    const ctx = this.labelCanvas.getContext("2d");
+    if (!ctx) return;
+    const W = this.labelCanvas.width;
+    const H = this.labelCanvas.height;
+    ctx.clearRect(0, 0, W, H);
+    // 座位号：白字描深边，压在任何地形上都读得清
+    ctx.font = "700 30px ui-monospace, Menlo, Consolas, monospace";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = "rgba(4,6,11,0.92)";
+    ctx.fillStyle = tone === "self" ? "#f5c542" : tone === "dead" ? "#94a3b8" : "#e8eef7";
+    const text = `P${this.seat}`;
+    ctx.strokeText(text, 4, 20);
+    ctx.fillText(text, 4, 20);
+    // 血条：满格绿 → 半血黄 → 残血红（与二维棋盘同一套配色）
+    const bx = 4, by = 40, bw = 118, bh = 12;
+    ctx.fillStyle = "rgba(4,6,11,0.8)";
+    ctx.fillRect(bx, by, bw, bh);
+    const frac = Math.max(0, Math.min(1, hpFrac));
+    ctx.fillStyle = frac > 0.5 ? "#34d399" : frac > 0.25 ? "#fbbf24" : "#f87171";
+    ctx.fillRect(bx + 1, by + 1, (bw - 2) * frac, bh - 2);
+    ctx.strokeStyle = "rgba(226,232,240,0.4)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(bx, by, bw, bh);
+    const map = (this.label.material as THREE.SpriteMaterial).map;
+    if (map) map.needsUpdate = true;
+  }
+
+  /** 炮口世界坐标（开炮特效的起点） */
+  muzzleWorld(out: THREE.Vector3): THREE.Vector3 {
+    this.group.updateMatrixWorld(true);
+    return this.turretGroup.localToWorld(out.copy(MUZZLE_LOCAL));
+  }
+
+  /** 车头方向的世界角度（相机跟随用；取"当前"而不是目标，避免相机先于车身转） */
+  forward(out: THREE.Vector3): THREE.Vector3 {
+    return out.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
+  }
+
+  update(dt: number): void {
+    if (this.ready) {
+      const kp = damp(POS_K, dt);
+      this.cx += (this.tx - this.cx) * kp;
+      this.cz += (this.tz - this.cz) * kp;
+      this.yaw = lerpAngle(this.yaw, this.targetYaw, damp(YAW_K, dt));
+    }
+    // 炮塔：开火后锁定目标一小会儿，然后回到车体朝向（表示"重新看正前方"）
+    this.turretHoldMs = Math.max(0, this.turretHoldMs - dt * 1000);
+    if (this.turretHoldMs <= 0) this.targetTurretYaw = this.yaw;
+    this.turretYaw = lerpAngle(this.turretYaw, this.targetTurretYaw, damp(TURRET_K, dt));
+
+    this.recoil = Math.max(0, this.recoil - dt * 4);
+    this.flash = Math.max(0, this.flash - dt * 6);
+    this.pop = Math.min(1, this.pop + dt * 3);
+
+    this.group.position.set(this.cx, 0, this.cz);
+    this.group.rotation.y = this.yaw;
+    this.turretGroup.rotation.y = this.turretYaw;
+    // 后坐：炮管沿 -Z 缩回一点
+    this.turretGroup.position.z = -0.06 * this.recoil;
+    const s = 0.86 + 0.14 * this.pop;
+    this.group.scale.set(s, this.pop < 1 ? Math.max(0.3, s) : 1, s);
+    this.marker.rotation.y += dt * 0.9;
+
+    // 命中闪白：直接改材质自发光，比后处理便宜且不会被抗锯齿糊掉
+    const f = this.flash;
+    for (const m of this.bodyMats) m.emissive.setRGB(f * 0.8, f * 0.6, f * 0.5);
+    this.edgeMat.emissive.setRGB(f * 0.5, f * 0.35, f * 0.3);
+    if (this.dead) this.wreck.rotation.y = this.yaw;
+  }
+
+  dispose(): void {
+    this.group.traverse((o) => {
+      const mesh = o as THREE.Mesh & { material?: THREE.Material | THREE.Material[]; geometry?: THREE.BufferGeometry };
+      mesh.geometry?.dispose?.();
+      const mats = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : [];
+      for (const m of mats) {
+        const withMap = m as THREE.Material & { map?: THREE.Texture | null };
+        withMap.map?.dispose();
+        m.dispose();
+      }
+    });
+  }
+}

@@ -9,6 +9,13 @@
 import { applyEvent, buildTerrain, createBattleView, type BattleView, type Terrain } from "@ai-game/engine";
 import type { GameMap, MatchEvent, Ruleset } from "@ai-game/protocol";
 
+/**
+ * 特效/音效只需要"刚刚发生的这几条"。极速播放或拖时间轴时一次可能应用上千条，
+ * 那时画面与声音都跟不上（也不该跟），所以只保留批次末尾这么多条，其余交由调用方按
+ * lastAppliedCount 判断"这是一次跳转"，直接跳过演出。
+ */
+export const MAX_FX_EVENTS = 64;
+
 export class BattleAccumulator {
   readonly terrain: Terrain;
   /** 已知的完整事件流：实时观战时由 WS 逐条追加，回放时一次性写入 */
@@ -16,6 +23,8 @@ export class BattleAccumulator {
   /** 已经归约到 source 的第几条 */
   private cursor = 0;
   private view: BattleView;
+  private batch: MatchEvent[] = [];
+  private batchCount = 0;
 
   constructor(
     readonly map: GameMap,
@@ -50,11 +59,26 @@ export class BattleAccumulator {
     return this.source.length - this.cursor;
   }
 
+  /**
+   * 最近一次 advance() 真正应用的事件（末尾最多 MAX_FX_EVENTS 条，顺序不变）。
+   * 渲染层据此播特效与音效：状态是"现在在哪"，批次才是"刚刚发生了什么"。
+   */
+  get lastApplied(): readonly MatchEvent[] {
+    return this.batch;
+  }
+
+  /** 最近一次 advance() 应用的事件总数；远大于 lastApplied.length 即表示发生过跳转 */
+  get lastAppliedCount(): number {
+    return this.batchCount;
+  }
+
   /** 覆盖式重置（WS snapshot 恢复 / 回放装载）：来源流被整体替换 */
   reset(events: readonly MatchEvent[]): void {
     this.source = [...events];
     this.cursor = 0;
     this.view = this.freshView();
+    this.batch = [];
+    this.batchCount = 0;
   }
 
   /** 实时新增事件：只入队，何时上屏由调用方的播放速度决定 */
@@ -67,6 +91,8 @@ export class BattleAccumulator {
     const end = Math.min(this.source.length, this.cursor + Math.max(0, n));
     for (let i = this.cursor; i < end; i++) applyEvent(this.view, this.source[i]!, this.rules);
     const applied = end - this.cursor;
+    this.batchCount = applied;
+    this.batch = applied > 0 ? this.source.slice(Math.max(this.cursor, end - MAX_FX_EVENTS), end) : [];
     this.cursor = end;
     return applied;
   }

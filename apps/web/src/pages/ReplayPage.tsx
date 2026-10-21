@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MatchEvent } from "@ai-game/protocol";
 import { bundles, type ReplayBundle } from "../api";
 import { BattleAccumulator, roundStarts } from "../battleState";
-import { BattleCanvas } from "../components/BattleCanvas";
+import { BattleStage } from "../components/BattleStage";
 import { EventLog } from "../components/EventLog";
 import { ScoreCards } from "../components/ScoreCards";
 import { Timeline, type TimelineMark } from "../components/Timeline";
@@ -289,12 +289,15 @@ export function ReplayPage({
             <ScoreCards view={view} rules={bundle.rules} players={bundle.players} />
           </aside>
           <div className="watch-board">
-            <BattleCanvas
+            <BattleStage
               map={bundle.map}
               terrain={acc.terrain}
               view={view}
               rules={bundle.rules}
+              batch={acc.lastApplied}
+              batchCount={acc.lastAppliedCount}
               viewpoint={viewpoint}
+              onViewpointChange={setViewpoint}
               version={frame}
             />
             <div className="board-note">

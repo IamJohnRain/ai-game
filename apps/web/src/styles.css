@@ -1662,3 +1662,65 @@ textarea {
 .ck-warn .ck-mark {
   color: #fbbf24;
 }
+
+/* ---------------- 战场呈现层：二维/三维切换（components/BattleStage.tsx） ---------------- */
+.stage {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 控制条固定在棋盘上方：渲染方式、机位、音效三组，窄屏时自动折行 */
+.stage-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.stage-bar .control-group {
+  gap: 6px;
+}
+
+/* 每个座位一对机位按钮：紧挨着装进一个 chip-pair，"跟/炮"是一组而不是两个独立选项 */
+.chip-pair {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.chip-pair .chip {
+  padding: 3px 9px;
+}
+
+.volume {
+  width: 92px;
+  accent-color: var(--accent);
+}
+
+/* 三维战场容器：高度固定（三维没有"格子数决定长宽比"这回事），由相机自己取景 */
+.scene3d {
+  position: relative;
+  height: clamp(320px, 56vh, 720px);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #070a10;
+  cursor: grab;
+}
+
+.scene3d canvas {
+  display: block;
+}
+
+.scene3d-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  font-size: 13px;
+}
