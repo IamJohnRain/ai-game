@@ -22,7 +22,7 @@ import { TankRig } from "./tanks.ts";
 import { FxSystem } from "./effects.ts";
 import { type FxCommand, type GridPos } from "./fxPlan.ts";
 import {
-  applyDrag, damp, fitDistance, followCamera, gunnerCamera, lerp, orbitPosition,
+  applyDrag, damp, fitDistance, followCamera, gunnerCamera, lerp, orbitPosition, panTarget,
 } from "./cameraMath.ts";
 
 export type CameraMode =
@@ -242,13 +242,11 @@ export function BattleScene3D(props: BattleScene3DProps) {
     el.style.cursor = "grab";
     const onPointerDown = (e: PointerEvent) => {
       el.setPointerCapture(e.pointerId);
-      const r = state.rig;
-      // 右键/中键/按住 Shift = 平移（与常见三维工具一致）
-      state.dragging = e.button === 0 && !e.shiftKey && r.mode.kind === "orbit" ? 1 : e.button === 0 ? 1 : 2;
+      // 左键 = 转视角（跟随/炮手模式下是转头）；右键、中键、按住 Shift 拖拽 = 平移 —— 与提示一致
+      state.dragging = e.button === 0 && !e.shiftKey ? 1 : 2;
       state.dragX = e.clientX;
       state.dragY = e.clientY;
       el.style.cursor = "grabbing";
-      if (r.mode.kind === "gunner" || r.mode.kind === "follow") state.dragging = e.button === 0 ? 1 : 2;
     };
     const onPointerMove = (e: PointerEvent) => {
       if (!state.dragging) return;
@@ -260,14 +258,10 @@ export function BattleScene3D(props: BattleScene3DProps) {
       if (r.mode.kind === "orbit") {
         if (state.dragging === 2) {
           // 平移：按当前距离缩放位移量，否则拉远后鼠标拖不动
-          const scale = r.dist / Math.max(400, state.heightPx);
-          const cos = Math.cos(r.yaw);
-          const sin = Math.sin(r.yaw);
-          r.targetX += (dx * cos - dy * sin) * scale;
-          r.targetZ += (-dx * sin - dy * cos) * scale;
+          const moved = panTarget(r.targetX, r.targetZ, r.yaw, dx, dy, r.dist, state.heightPx);
           const lim = Math.max(spanX, spanZ);
-          r.targetX = Math.max(-lim, Math.min(lim, r.targetX));
-          r.targetZ = Math.max(-lim, Math.min(lim, r.targetZ));
+          r.targetX = Math.max(-lim, Math.min(lim, moved.x));
+          r.targetZ = Math.max(-lim, Math.min(lim, moved.z));
         } else {
           const next = applyDrag(r.yaw, r.pitch, dx, dy, state.heightPx);
           r.yaw = next.yaw;

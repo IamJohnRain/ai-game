@@ -135,8 +135,36 @@ export function gunnerCamera(
   return { pos, look: { x: pos.x + Math.sin(yaw) * 10, y: pos.y + Math.sin(pitch) * 10, z: pos.z + Math.cos(yaw) * 10 } };
 }
 
-/** 拖拽增量 → 新的 yaw/pitch（orbit 与 follow/gunner 共用；像素灵敏度按容器高度归一，大小屏手感一致） */
+/**
+ * 拖拽增量 → 新的 yaw/pitch（orbit 与 follow/gunner 共用；像素灵敏度按容器高度归一，大小屏手感一致）。
+ *
+ * 方向约定：左右拖拽是"画面跟手"——向右拖，场景跟着往右走，相机于是往反方向绕
+ * （与 Google 地图 / three.js OrbitControls 一致）；上下拖拽保持"向下拖 = 相机抬高"不变。
+ */
 export function applyDrag(yaw: number, pitch: number, dxPx: number, dyPx: number, heightPx: number, rate = 1.6): { yaw: number; pitch: number } {
   const scale = rate / Math.max(120, heightPx);
-  return { yaw: wrapAngle(yaw + dxPx * scale), pitch: clampPitch(pitch + dyPx * scale) };
+  return { yaw: wrapAngle(yaw - dxPx * scale), pitch: clampPitch(pitch + dyPx * scale) };
+}
+
+/**
+ * 平移：把注视点（相机跟着走）沿相机右向 / 屏幕内方向挪动。右键或 Shift 拖拽用。
+ * 左右与转视角同一套"画面跟手"（向右拖场景往右走 = 注视点往左移）；**上下保持原样**（向下拖 = 注视点往里推）。
+ * 位移量按距离缩放，否则拉远之后鼠标就拖不动了。
+ */
+export function panTarget(
+  targetX: number,
+  targetZ: number,
+  yaw: number,
+  dxPx: number,
+  dyPx: number,
+  dist: number,
+  heightPx: number,
+): { x: number; z: number } {
+  const scale = dist / Math.max(400, heightPx);
+  const cos = Math.cos(yaw);
+  const sin = Math.sin(yaw);
+  return {
+    x: targetX + (-dxPx * cos - dyPx * sin) * scale,
+    z: targetZ + (dxPx * sin - dyPx * cos) * scale,
+  };
 }

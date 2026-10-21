@@ -8,12 +8,13 @@
 //   这里把它们钉死，剩下的交给浏览器实测。
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import * as THREE from "three";
 import type { GameMap, MatchEvent, Ruleset } from "@ai-game/protocol";
 import { BattleAccumulator, MAX_FX_EVENTS } from "../src/battleState.ts";
 import { impactSound, planFx, soundFor, type FxCommand } from "../src/scene3d/fxPlan.ts";
 import {
   PITCH_MAX, applyDrag, clampPitch, damp, fitDistance, followCamera, gunnerCamera, lerpAngle,
-  orbitPosition, tileToWorld, wrapAngle, yawOfDir, yawOfStep,
+  orbitPosition, panTarget, tileToWorld, wrapAngle, yawOfDir, yawOfStep,
 } from "../src/scene3d/cameraMath.ts";
 
 // ---------------------------------------------------------------- 测试用最小地图/规则
@@ -236,4 +237,54 @@ test("拖拽灵敏度：按视口高度归一（大小屏手感一致），并�
   const big = applyDrag(0, 0.5, 100, 0, 400);
   assert.ok(Math.abs(big.yaw - 2 * small.yaw) < 1e-9, "高度减半、同样像素位移 → 转角翻倍");
   assert.equal(applyDrag(0, 0.5, 0, 10_000, 800).pitch, PITCH_MAX, "一直往下拖也不能翻到地平面以下");
+});
+
+test("拖拽方向：左右是画面跟手（右拖 → yaw 反向），上下保持原方向", () => {
+  const base = 0.5;
+  const right = applyDrag(base, base, 120, 0, 800);
+  assert.ok(right.yaw < base, "向右拖拽：相机往反方向绕，场景跟着手往右走");
+  const left = applyDrag(base, base, -120, 0, 800);
+  assert.ok(left.yaw > base, "向左拖拽同理反向");
+  const down = applyDrag(base, base, 0, 120, 800);
+  assert.ok(down.pitch > base && down.yaw === base, "向下拖拽只抬高相机，不碰 yaw");
+  const up = applyDrag(base, base, 0, -120, 800);
+  assert.ok(up.pitch < base, "向上拖拽压低相机（与之前一致）");
+});
+
+// 用真实的透视相机把"画面往哪边走"投影出来 —— 方向这种事只有站在观众角度量才算数：
+// 世界坐标 → 相机 → NDC。x 变大 = 画面里的那个点往右移，y 变大 = 往上移。
+test("拖拽方向的投影实测：左右都是画面跟手，上下维持原约定", () => {
+  const camera = new THREE.PerspectiveCamera(50, 1.6, 0.1, 400);
+  camera.updateProjectionMatrix();
+  const place = (yaw: number, pitch: number, tx: number, tz: number, dist: number) => {
+    const pos = orbitPosition({ x: tx, y: 0, z: tz }, yaw, pitch, dist);
+    camera.position.set(pos.x, pos.y, pos.z);
+    camera.lookAt(tx, 0, tz);
+    camera.updateMatrixWorld(true);
+  };
+  const project = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z).project(camera);
+
+  // 基准：站在 yaw=0（相机在南侧）看向棋盘中心，(0,0,6) 这个靠近观众的地面点正好在画面横向正中
+  place(0, 0.7, 0, 0, 30);
+  const base = project(0, 0, 6).clone();
+
+  // ① 转视角：向右拖 120px → 该点应当往右走
+  const turn = applyDrag(0, 0.7, 120, 0, 800);
+  place(turn.yaw, turn.pitch, 0, 0, 30);
+  const turned = project(0, 0, 6);
+  assert.ok(turned.x > base.x + 1e-6, `转视角：向右拖拽应让画面往右（x ${base.x} → ${turned.x}）`);
+
+  // ② 平移：向右拖 120px → 同样往右走（与转视角一个方向）
+  const panned = panTarget(0, 0, 0, 120, 0, 30, 800);
+  place(0, 0.7, panned.x, panned.z, 30);
+  const shifted = project(0, 0, 6);
+  assert.ok(shifted.x > base.x + 1e-6, `平移：向右拖拽也应让画面往右（x ${base.x} → ${shifted.x}）`);
+  assert.ok(panned.x < 0, "注视点应当往左移（相机跟着走，画面才往右）");
+
+  // ③ 平移的上下沿用原约定（dy 的符号没动）：向下拖 → 注视点往里推（z 变小），画面里的点跟着往下走
+  const pannedDown = panTarget(0, 0, 0, 0, 120, 30, 800);
+  assert.deepEqual(pannedDown, { x: 0, z: -4.5 }, "向下拖 120px：注视点往里推 4.5（距离 30、视口 800）");
+  place(0, 0.7, pannedDown.x, pannedDown.z, 30);
+  const downed = project(0, 0, 6);
+  assert.ok(downed.y < base.y - 1e-6, `向下拖拽：画面里的点往下走，与改动前一致（y ${base.y} → ${downed.y}）`);
 });
