@@ -806,11 +806,21 @@ export function MapEditorPage() {
                 onChange={(e) => commit(setTuning(draft, { cargoMax: Math.max(0, Math.round(Number(e.target.value) || 0)) }))}
               />
             </label>
+            <label className="field">
+              <span>最大地雷（0 = 这张图没有地雷）</span>
+              <input
+                type="number"
+                min={0}
+                value={draft.tuning.mineMax ?? DEFAULT_TUNING.mineMax}
+                onChange={(e) => commit(setTuning(draft, { mineMax: Math.max(0, Math.round(Number(e.target.value) || 0)) }))}
+              />
+            </label>
           </div>
         ) : null}
         <p className="hint">
-          上限调低时，出门与复活的补给会自动夹到上限之内（载弹上限 0 的图，坦克出门就没有炮弹，只在采集与提交上比高低）。
-          脚本一律读 <code>state.self.hpMax / ammoMax / cargoMax</code>，不要假设它们等于规则默认值。
+          上限调低时，出门与复活的补给会自动夹到上限之内（载弹上限 0 的图，坦克出门就没有炮弹，只在采集与提交上比高低；
+          但**地雷仍然能击杀**，想彻底没有战斗就把最大地雷也设成 0）。
+          脚本一律读 <code>state.self.hpMax / ammoMax / cargoMax / minesMax</code>，不要假设它们等于规则默认值。
         </p>
       </Section>
 

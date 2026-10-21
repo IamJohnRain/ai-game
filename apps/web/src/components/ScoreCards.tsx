@@ -60,6 +60,12 @@ export function ScoreCards({ view, rules, players = [], ranking = [] }: ScoreCar
               <span className="score-num">{tank.score}</span>
               <span className="score-label">分</span>
               {rank !== null ? <span className="rank-tag">#{rank}</span> : null}
+              {/* 防御状态只有观战能看到（脚本看不到对手的这个状态），用蓝色标签点出来 */}
+              {tank.alive && tank.defendLeft > 0 ? (
+                <span className="defend-tag" title={`防御中：还剩 ${tank.defendLeft} 轮，炮弹打不动（对方看不到）`}>
+                  🛡 防御 {tank.defendLeft}
+                </span>
+              ) : null}
               <span className={`alive-tag ${tank.alive ? "alive" : "dead"}`}>
                 {tank.disqualified ? "已淘汰" : tank.alive ? "在场" : "阵亡（等待复活）"}
               </span>
@@ -69,11 +75,20 @@ export function ScoreCards({ view, rules, players = [], ranking = [] }: ScoreCar
             <ProgressBar label="弹药" value={tank.ammo} max={rules.ammoMax} color="#f0a72c" />
             <ProgressBar label="燃油" value={tank.fuel} max={rules.fuelMax} color="#2fbdb0" />
             <ProgressBar label="货舱" value={tank.cargo} max={rules.cargoMax} color="#a78bfa" />
+            {/* 地雷上限为 0 的图上不摆这一栏（那种图根本没有雷） */}
+            {rules.mineMax > 0 ? (
+              <ProgressBar label="地雷" value={tank.mines} max={rules.mineMax} color="#f87171" />
+            ) : null}
 
             <footer className="card-foot">
               <span>击杀 {tank.kills}</span>
               <span>死亡 {tank.deaths}</span>
               <span>提交 {tank.deposits} 次 / {tank.unitsDeposited} 单位</span>
+              {typeof stat?.minesDeployed === "number" && stat.minesDeployed > 0 ? (
+                <span title={stat.mineKills > 0 ? `其中 ${stat.mineKills} 次是对手踩响的` : "对手还没踩到"}>
+                  布雷 {stat.minesDeployed}
+                </span>
+              ) : null}
               {typeof stat?.avgDecisionMs === "number" ? <span>决策 {fmtMs(stat.avgDecisionMs)}</span> : null}
             </footer>
           </div>

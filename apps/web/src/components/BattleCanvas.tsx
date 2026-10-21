@@ -287,7 +287,18 @@ export function BattleCanvas({ map, terrain, view, rules, viewpoint, version }: 
         ctx.globalAlpha = 1;
         const cx = px(fire.target.x) + cell / 2;
         const cy = py(fire.target.y) + cell / 2;
-        if (fire.hit) {
+        if (fire.blocked) {
+          // 打在防御上：一圈淡蓝护罩波纹 + 中心的小方块（"弹开了"），和命中/未命中都不一样
+          ctx.strokeStyle = "rgba(122,162,255,0.95)";
+          ctx.lineWidth = Math.max(1.5, cell * 0.1);
+          ctx.beginPath();
+          ctx.arc(cx, cy, cell * 0.38, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.strokeStyle = "rgba(226,232,240,0.85)";
+          ctx.beginPath();
+          ctx.arc(cx, cy, cell * 0.24, 0, Math.PI * 2);
+          ctx.stroke();
+        } else if (fire.hit) {
           // 命中：一团爆炸 + 四道冲击短划
           ctx.fillStyle = "rgba(248,113,113,0.85)";
           ctx.beginPath();
@@ -311,6 +322,34 @@ export function BattleCanvas({ map, terrain, view, rules, viewpoint, version }: 
           ctx.stroke();
           ctx.setLineDash([]);
         }
+      }
+    }
+
+    // ---------- 4.5 地雷（只有观战/回放能看到：脚本那边连自己的雷都没有字段） ----------
+    // 画成"一格暗色圆盘 + 中央红色引信 + 埋雷方的座位色细环"：不遮地形，也不喧宾夺主。
+    for (const mine of view.mines) {
+      const cx = px(mine.x) + cell / 2;
+      const cy = py(mine.y) + cell / 2;
+      const r = cell * 0.3;
+      ctx.fillStyle = "rgba(15,20,28,0.85)";
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = SEAT_COLORS[mine.owner] ?? "#94a3b8";
+      ctx.lineWidth = Math.max(1, cell * 0.06);
+      ctx.beginPath();
+      ctx.arc(cx, cy, r + Math.max(1, cell * 0.05), 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = "#ff4d4d";
+      ctx.beginPath();
+      ctx.arc(cx, cy, Math.max(1.2, cell * 0.1), 0, Math.PI * 2);
+      ctx.fill();
+      if (cell >= 22) {
+        ctx.fillStyle = "rgba(248,113,113,0.95)";
+        ctx.font = `700 ${Math.max(8, Math.floor(cell * 0.28))}px ui-monospace, Menlo, Consolas, monospace`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("✱", cx, py(mine.y) + cell * 0.14);
       }
     }
 
@@ -445,6 +484,22 @@ export function BattleCanvas({ map, terrain, view, rules, viewpoint, version }: 
         ctx.lineWidth = Math.max(1, cell * 0.07);
         ctx.strokeRect(px(t.x) + 1, py(t.y) + 1, cell - 2, cell - 2);
       }
+
+      // 防御状态：车外一圈蓝色护罩环 + 右上角的盾形标记（脚本看不到这个状态，观战看得到）
+      if (t.alive && t.defendLeft > 0) {
+        ctx.strokeStyle = `rgba(122,162,255,${0.55 + 0.35 * (t.defendLeft / Math.max(1, rules.defendRounds))})`;
+        ctx.lineWidth = Math.max(1.5, cell * 0.09);
+        ctx.beginPath();
+        ctx.arc(cx, cy, cell * 0.42, 0, Math.PI * 2);
+        ctx.stroke();
+        if (cell >= 14) {
+          ctx.fillStyle = "rgba(191,219,254,0.95)";
+          ctx.font = `700 ${Math.max(9, Math.floor(cell * 0.34))}px ui-monospace, Menlo, Consolas, monospace`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText("🛡", px(t.x) + cell * 0.22, py(t.y) + cell * 0.24);
+        }
+      }
     }
 
     // ---------- 6. 迷雾遮罩 ----------
@@ -510,6 +565,15 @@ export function BattleLegend() {
           P{seat}
         </span>
       ))}
+      {/* 地雷与防御只有观战/回放看得到（脚本那边是不可感知的状态），所以在图例里也标一句口径 */}
+      <span className="legend-item" title="地雷：埋下后对所有脚本不可见，踩上去清空血量（不分敌我）">
+        <span className="legend-icon legend-glyph" style={{ color: "#ff6b6b" }}>✱</span>
+        地雷（仅观战可见）
+      </span>
+      <span className="legend-item" title="防御：停止一个回合举盾，两轮内炮弹打不动（对手看不到）">
+        <span className="legend-icon legend-glyph" style={{ color: "#bfdbfe" }}>🛡</span>
+        防御中
+      </span>
     </div>
   );
 }

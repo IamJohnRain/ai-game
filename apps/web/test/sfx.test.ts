@@ -12,6 +12,7 @@ import { SFX_KINDS, Sfx, sfx, sfxSpec, type SfxKind } from "../src/sfx.ts";
 const EXPECTED_KINDS: readonly SfxKind[] = [
   "fire", "hit", "miss", "collect", "deposit", "refuel", "loadAmmo",
   "death", "respawn", "invalid", "disqualified", "tread", "end", "ui",
+  "defend", "mineDeploy", "mineBlast",
 ];
 
 test("SFX_KINDS 与 SfxKind 一一对应且无重复", () => {

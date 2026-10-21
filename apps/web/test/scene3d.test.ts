@@ -117,8 +117,16 @@ test("指令 → 音效：命中/脱靶分开、普通移动不发声、阵亡�
     "普通移动不发声（每秒 20 次会变成噪音）",
   );
   assert.equal(soundFor({ kind: "move", seat: 1, from: { x: 0, y: 0 }, to: { x: 0, y: 1 }, emergency: true })?.kind, "tread");
-  assert.equal(soundFor({ kind: "death", seat: 1, at: { x: 0, y: 0 }, killerSeat: 2 })?.seat, 2);
+  assert.equal(soundFor({ kind: "death", seat: 1, at: { x: 0, y: 0 }, killerSeat: 2, cause: "fire" })?.seat, 2);
   assert.equal(soundFor({ kind: "end" })?.kind, "end");
+  // 新机制的音效：布雷/触雷/举盾各有一条；被防御弹开的那一炮换成"护盾吃弹"的声
+  assert.equal(soundFor({ kind: "mineTrigger", seat: 2, at: { x: 1, y: 1 }, owner: 1 })?.kind, "mineBlast");
+  assert.equal(soundFor({ kind: "deployMine", seat: 1, at: { x: 1, y: 1 } })?.kind, "mineDeploy");
+  assert.equal(soundFor({ kind: "defend", seat: 1, at: { x: 1, y: 1 }, rounds: 2 })?.kind, "defend");
+  assert.equal(
+    soundFor({ kind: "fire", seat: 1, from: { x: 0, y: 0 }, to: { x: 0, y: 1 }, hit: true, targetSeat: 2, damage: 0, blocked: true })?.kind,
+    "defend",
+  );
 });
 
 // ---------------------------------------------------------------- 归约器的「刚刚发生了什么」

@@ -28,6 +28,7 @@
 核心循环：**去资源点采集 → 去提交点交资源换分 → 顺路补弹药和燃油**。补弹药扣分、加油扣分、死亡扣分；提交资源得分、击杀敌方得分。
 死亡后：扣 `RULES.deathPenalty` 分，载货清零，在出生点复活，并**跳过 `RULES.respawnRounds` 个自己的回合**（停机期间 `onTurn` 不会被调用，所以你在 `onTurn` 里只会看到"自己还活着"）。
 血量/弹药/燃油/载货见底不会赢得任何好处，只会让你更脆弱——但盲目送死要倒扣分（约等于损失半趟资源收益），还会停机数轮。**没有修理机制**：受了伤就一直带着伤，只有死亡复活才会回满血。
+除了经济循环，你还有两手保命/设伏的动作：**防御**（`{type:"defend"}`，停止一个回合举盾，`RULES.defendRounds` 轮内炮弹伤害全免，对手看不到你在防御）与**地雷**（`{type:"deployMine"}`，埋雷**不分敌我**、对所有人不可见，谁移动走进那一格谁血量清空）。两者都见第 5.6 节。
 
 ### 5.4 你需要实现的两个接口
 
@@ -63,7 +64,7 @@
 | `MAP.ammoDepots` / `MAP.fuelStations` | 弹药点 / 加油点坐标数组（**数量每张图都不同，可能只有一个**）；只写 `{x,y}` 的是无限供给，带 `capacity/initial/regenEveryRounds` 的有库存，见第 6.5 节 |
 | `MAP.depositPoints` | 提交点坐标数组（`deposit` 交资源换分的地方） |
 | `MAP.resourceNodes` | `{id, x, y, kind, capacity, initial, regenEveryRounds}` 数组，语义见第 6.4 节 |
-| `MAP.tuning` | （可选）地图对车辆上限的覆盖：`hpMax` / `ammoMax` / `cargoMax`，缺省沿用 `RULES`。**上限一律读 `state.self.*`**，见第 6.6 节；`ammoMax: 0` 的图上禁止相互攻击 |
+| `MAP.tuning` | （可选）地图对车辆上限的覆盖：`hpMax` / `ammoMax` / `cargoMax` / `mineMax`，缺省沿用 `RULES`。**上限一律读 `state.self.*`**，见第 6.6 节；`ammoMax: 0` 的图上禁止相互攻击（但地雷仍可击杀，除非 `mineMax` 也是 0） |
 
 **RULES** —— 完整数值表，字段名即参数名，见第 7 节。**赛事可能使用参数变体**（例如视野更小、油箱更小的对抗变体），**地图也可能覆盖车辆上限**（`MAP.tuning`）：所有数值一律以运行时的 `RULES` 与 `state.self.*` 为准，脚本里不要复制任何数字。
 
@@ -78,13 +79,18 @@
 { type: "fire",    target: { x: 12, y: 9 } } // 消耗 1 AP + 1 发弹药
 { type: "collect" }    // 站在资源点上，采集 min(RULES.collectPerAction, 该点剩余, 我的载货空余) 单位
 { type: "deposit" }    // 站在提交点上，载货全部转为积分：+RULES.depositScorePerUnit 分/单位
-{ type: "loadAmmo" }   // 站在弹药补给点，装填 min(RULES.loadAmmoPerAction, 弹药空余) 发，扣 RULES.ammoPrice 分/发
+{ type: "loadAmmo" }   // 站在弹药补给点，装填 min(RULES.loadAmmoPerAction, 弹药空余) 发，扣 RULES.ammoPrice 分/发；**同时把地雷补满**（地雷不额外扣分）
 { type: "refuel" }     // 站在加油点，加入 min(RULES.refuelPerAction, 燃油空余)，扣分见 RULES.fuelPricePer10
+{ type: "defend" }     // 防御：消耗整回合行动力（= RULES.apPerTurn 点，所以它必须是本回合唯一的动作）
+{ type: "deployMine" } // 布雷：消耗 1 AP + 1 枚地雷，埋在自己当前所在的格子上
 { type: "wait" }       // 空动作
 ```
 
 - 动作被**依次执行**（例如 `[move, fire]` 是先移动再射击，射击位置是移动后的新位置）。
-- 无效动作（撞墙/撞车/无弹药/超射程/无视线/不在对应设施上补给……）会**消耗 1 AP 但没有效果**，并计入你的无效动作统计。所以每个动作前都要自查前置条件。
+- **AP 是按动作扣的**：`wait` 不花 AP，`defend` 花掉整回合（`RULES.apPerTurn` 点），其余动作各 1 点。
+  所以 `[{type:"defend"},{type:"move",...}]` 里的移动会因为 AP 不够而记为 `NO_AP` 无效动作（防御照样立起来），
+  而 `[{type:"move",...},{type:"defend"}]` 里的防御立不起来（移动已经花掉 1 点）。想举盾就**本回合只返回防御**。
+- 无效动作（撞墙/撞车/无弹药/超射程/无视线/不在对应设施上补给/没雷可布/AP 不够……）会**消耗 1 AP 但没有效果**，并计入你的无效动作统计。所以每个动作前都要自查前置条件。
 - 返回 `[]` 表示本回合什么都不做（等于放弃全部 AP，尽量避免）。
 - 方向定义：N=(0,-1) E=(+1,0) S=(0,+1) W=(-1,0)。
 
@@ -98,13 +104,24 @@
 - 可以对空地开火（浪费 1 发），但不能打自己。
 - 敌人不在视野内时，`state.lastKnownEnemies` 给出引擎记录的"最后已知位置"（保留 `RULES.lastKnownMemoryRounds` 轮），可用于推测和盲射。
 - 你无法看到敌人的弹药、燃油；能看到敌人的 HP、载货、积分。
+- **防御**（`{type:"defend"}`）：停止一个回合举盾，从你的回合立刻生效，`RULES.defendRounds` 轮内**炮弹伤害被完全挡下**（伤害 0，炮弹照样被消耗）。
+  - `state.self.defendLeft` = 还剩几轮（0 = 没在防御）；`state.events` 里会收到 `{type:"defend"}`。
+  - **对方看不到你在防御**：`state.enemies` 里没有任何防御字段，对方只能从"打中了但伤害是 0"这件事间接察觉。
+  - 防御只挡炮弹：**踩到地雷照样清空血量**。重新防御会把计时重置回 `RULES.defendRounds` 轮。
+- **地雷**（`{type:"deployMine"}`）：消耗 1 AP + 1 枚地雷，埋在**自己当前所在的格子**上（任何可通行格都行，森林里也可以）。
+  - 随身携带上限 `RULES.mineMax` 枚，开局与复活都是满的，在弹药补给点装弹时会一起补满（`loadAmmo`）。
+  - **地雷对所有人不可感知**：`state` 里没有任何字段告诉你哪里有雷 —— 连你自己埋的也一样，只能自己记（模块级变量在整场比赛里持续存在，用它记下自己埋过的位置）。
+  - 触发：任何坦克（**包括你自己**）**移动进入**那一格时，地雷立刻引爆并消耗掉，**踩中的坦克血量清空（直接阵亡）**，防御也挡不住；埋雷方按击杀记账（`+RULES.killReward`），自己踩自己的雷不算击杀。
+  - 复活/开局"出现在"格子上不算"移动进入"，因此出生点上即使有雷也不会立刻引爆。
+  - 代价：一枚雷只有一次机会（引爆即消耗），而**它挡路时对你也一样挡**——埋在自己必经的窄路或关键设施上，等于把那条路也对自己封了。
 
 ### 5.7 经济（关键：这是得分游戏，不是歼灭游戏）
 
 - 提交资源：站到提交点上执行 `deposit`，每单位 +`RULES.depositScorePerUnit` 分，载货上限 `RULES.cargoMax` → 单趟最高 +`cargoMax × depositScorePerUnit` 分。**提交点与资源点的相对位置决定了一张图的性格**（近端资源点安全但产出低，中心资源点产出高但所有人都会来），而**每张图都不一样**：距离请在 `onInit` 里用 `API.pathFind` 实测（第 6.7 节）。
 - 采集：站在资源点上 `collect`，一次最多 `RULES.collectPerAction` 单位；资源点有容量与回复速度（每 `regenEveryRounds` 轮 +1 单位，见 `MAP.resourceNodes`），`remaining` 只在视野内可见。
 - 补弹：`RULES.ammoPrice` 分/发；加油：`RULES.fuelPricePer10` 分/10 燃油；移动 `RULES.moveFuelCost` 燃油/格；燃油耗尽后仍可移动，但每格扣 `RULES.emergencyMoveCost` 分（应急燃料，尽量避免）。
-- **补给点可能是有库存的**：`MAP.ammoDepots` / `MAP.fuelStations` 里只写 `{x,y}` 的点无限供给；写了 `capacity` 的点会被拿空、每 `regenEveryRounds` 轮回 1 点，空了补给会被拒（`AMMO_EMPTY` / `FUEL_EMPTY`），余量看 `state.ammoDepots[].remaining` / `state.fuelStations[].remaining`（见第 6.5 节）。
+- 地雷：`loadAmmo` 时**免费**补满到 `RULES.mineMax` 枚（代价是跑一趟补给点 + 占用随身位，布雷不扣分）；一枚雷只有一次机会，而踩中它的可能是你自己。
+- **补给点可能是有库存的**：`MAP.ammoDepots` / `MAP.fuelStations` 里只写 `{x,y}` 的点无限供给；写了 `capacity` 的点会被拿空、每 `regenEveryRounds` 轮回 1 点，空了补给会被拒（`AMMO_EMPTY` / `FUEL_EMPTY`），余量看 `state.ammoDepots[].remaining` / `state.fuelStations[].remaining`（见第 6.5 节）。**取地雷也吃同一份库存**（先给弹药，剩下的余量才轮到雷）。
 - 死亡：-`RULES.deathPenalty` 分 + 停机 `RULES.respawnRounds` 轮 + 载货清零；击杀者 +`RULES.killReward` 分。
 - 结论：一趟"资源点 → 提交点 → 顺路补给"的循环收益 = 单趟载货 ×10 分，扣掉燃油与弹药成本后仍有明显正收益；而**在提交点附近蹲守的对手是在抢同一份收入**，这笔账要自己算。
 
@@ -126,7 +143,8 @@
   "turnInRound": 1,
   "self": { "seat": 2, "pos": {"x": 8, "y": 14}, "hp": 70, "hpMax": 100,
             "ammo": 6, "ammoMax": 20, "fuel": 42, "fuelMax": 100,
-            "cargo": 3, "cargoMax": 5, "score": 120, "alive": true,
+            "cargo": 3, "cargoMax": 5, "mines": 2, "minesMax": 2, "defendLeft": 0,
+            "score": 120, "alive": true,
             "disabledTurns": 0, "kills": 1, "deaths": 1, "spawn": {"x":8,"y":14} },
   "enemies": [ { "seat": 1, "pos": {"x":8,"y":6}, "hp": 100, "cargo": 0, "score": 90, "distance": 8 } ],
   "lastKnownEnemies": [ { "seat": 1, "pos": {"x":8,"y":7}, "hp": 100, "seenRound": 36 } ],
@@ -137,7 +155,8 @@
   "fuelStations": [ {"x":8,"y":4} ],
   "scores": [ {"seat":1,"score":90,"alive":true}, {"seat":2,"score":120,"alive":true} ],
   "events": [ { "type":"hit", "by":2, "targetSeat":1, "damage":20, "pos":{"x":8,"y":8}, "round":36 },
-              { "type":"death", "seat":1, "pos":{"x":8,"y":8}, "round":36 },
+              { "type":"hit", "by":2, "targetSeat":1, "damage":0, "pos":{"x":8,"y":8}, "round":37 },
+              { "type":"death", "seat":1, "pos":{"x":8,"y":8}, "round":36, "cause":"mine" },
               { "type":"invalid_action", "action":{"type":"move","dir":"N"}, "reason":"BLOCKED_BY_WALL" } ]
 }
 ```
@@ -146,9 +165,11 @@
 
 字段说明：
 - `self.pos` 是**你即将做决策时的位置**（本回合动作尚未执行）。
+- `self.mines` / `self.minesMax` 是你随身的地雷；`self.defendLeft` 是你自己的防御剩余轮数。
+  **注意 `enemies[]` 里没有这些字段**：对手带了几枚雷、有没有在防御，都只能从他做了什么去推。
 - `enemies[].seat` 是敌人座位号，可用于持续追踪某一个对手。
 - `resourceNodes` 永远是**全部**节点；只有你视野内的节点 `remaining` 是数字，视野外是 `null`。
-- `events` 是"自你上次行动以来，你可知的事件"：你被击中、你的射击结果、公开的死亡公告、你的无效动作、你的补给/提交结果等。可用它做简单反应（例如刚被打就撤退）。
+- `events` 是"自你上次行动以来，你可知的事件"：你被击中、你的射击结果、公开的死亡公告（带 `cause`：`fire` = 被炮弹打死、`mine` = 踩雷）、你的无效动作、你的补给/提交结果、你自己的防御生效等。可用它做简单反应（例如刚被打就撤退/举盾）。
 - `MAP` 不会重复出现在 `state` 里（用全局 `MAP`）。
 
 ### 5.10 API 工具函数（强烈建议使用，能显著降低出错率）
@@ -176,3 +197,5 @@
 5. 资源点 `remaining` 为 `null` 或 0（看不见或已采空）。
 6. 任何字段缺失或类型异常时都不能抛异常（用默认值兜底）。
 7. `onTurn` 里出现未捕获异常 → 该回合记一次异常，累计 3 次你将被强制待机直到终局。
+8. 新机制的极端值：`mines` 为 0（不能布雷）、`minesMax` 为 0（这张图根本没有雷）、`hpMax` 被地图压到很低（一炮就能死）、`defendLeft` 不为 0（你还在防御）。
+   还有一类**"记性"陷阱**：地雷对自己也不可见，你自己的雷只有你自己的变量记得住 —— 忘了它，你就会在下次路过时把自己清空血量。

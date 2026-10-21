@@ -307,6 +307,8 @@ test("任务书：不指定具体地图（只给通用地图规范），Markdown
     for (const probe of [
       "外部 Agent 任务书", "function onTurn(state)", "API.pathFind", "strategy.js", "200 KB", "ZIP", "自查清单", "1v1 循环赛",
       "地图规范", "字符表", "MAP.spawnsFor1v1", "不挑图", "练习通道", "评测批次", "Bradley–Terry",
+      // ruleset-1.2 的两条新机制必须出现在任务书里（外部 Agent 靠它写防御与布雷）
+      "{ type: \"defend\" }", "{ type: \"deployMine\" }", "地雷",
     ]) {
       assert.ok(text.includes(probe), `任务书应包含：${probe}`);
     }
@@ -330,7 +332,7 @@ test("任务书：不指定具体地图（只给通用地图规范），Markdown
     assert.deepEqual(auditMap(MAP_SPEC_EXAMPLE, DEFAULT_RULESET).errors, [], "结构示例也应通过玩法审计的硬性判据");
 
     const json = (await ctx.req({ method: "GET", url: "/api/task-doc?format=json" })).json();
-    assert.equal(json.version, "v1.2");
+    assert.equal(json.version, "v1.3");
     assert.equal(json.mapId, undefined, "任务书 JSON 不应再带 mapId（任务书与地图无关）");
     assert.match(json.endpoints.upload, /\/api\/upload$/);
     assert.equal(json.limits.zipMaxBytes, 204800);

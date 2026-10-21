@@ -58,6 +58,106 @@ export interface BattleScene3DProps {
 const ORBIT_FOV = 50;
 const GUNNER_FOV = 62;
 
+/**
+ * 地雷标记：座位色圆盘 + 红色引信（两个 InstancedMesh，容量 64）。
+ * 只在上帝视角显示 —— 座位视角下地雷对所有脚本都不可感知，画面也不能泄露。
+ */
+class MineMarkers {
+  readonly group = new THREE.Group();
+  private readonly disc: THREE.InstancedMesh;
+  private readonly pin: THREE.InstancedMesh;
+  private readonly dummy = new THREE.Object3D();
+  private readonly color = new THREE.Color();
+
+  constructor() {
+    this.group.name = "mines";
+    this.disc = new THREE.InstancedMesh(
+      new THREE.CylinderGeometry(0.26, 0.26, 0.06, 10),
+      new THREE.MeshStandardMaterial({ roughness: 0.5, metalness: 0.3 }),
+      64,
+    );
+    this.pin = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(0.07, 8, 6),
+      new THREE.MeshStandardMaterial({ color: 0xff4d4d, emissive: 0xff2a2a, emissiveIntensity: 1.1, roughness: 0.35 }),
+      64,
+    );
+    this.disc.name = "mine-disc";
+    this.pin.name = "mine-pin";
+    this.group.add(this.disc, this.pin);
+  }
+
+  /** 按当前 view.mines 摆放；超出容量就截断（一张图上不会有几十枚雷同时埋着） */
+  sync(mines: BattleView["mines"], wx: (x: number) => number, wz: (y: number) => number, visible: boolean): void {
+    const n = Math.min(mines.length, 64);
+    this.group.visible = visible && n > 0;
+    for (let i = 0; i < n; i++) {
+      const m = mines[i]!;
+      const x = wx(m.x);
+      const z = wz(m.y);
+      this.dummy.position.set(x, 0.04, z);
+      this.dummy.rotation.set(0, 0, 0);
+      this.dummy.updateMatrix();
+      this.disc.setMatrixAt(i, this.dummy.matrix);
+      this.disc.setColorAt(i, this.color.setHex(SEAT_COLORS_3D[m.owner] ?? 0x94a3b8));
+      this.dummy.position.set(x, 0.11, z);
+      this.dummy.updateMatrix();
+      this.pin.setMatrixAt(i, this.dummy.matrix);
+    }
+    this.disc.count = n;
+    this.pin.count = n;
+    this.disc.instanceMatrix.needsUpdate = true;
+    this.pin.instanceMatrix.needsUpdate = true;
+    if (this.disc.instanceColor) this.disc.instanceColor.needsUpdate = true;
+  }
+
+  dispose(): void {
+    this.disc.geometry.dispose();
+    (this.disc.material as THREE.Material).dispose();
+    this.pin.geometry.dispose();
+    (this.pin.material as THREE.Material).dispose();
+    this.disc.dispose();
+    this.pin.dispose();
+  }
+}
+
+/** 防御护罩：车上一顶半透明的蓝色罩子（一个 InstancedMesh，容量 = 最大座位数 4） */
+class ShieldDomes {
+  readonly group = new THREE.Group();
+  private readonly dome: THREE.InstancedMesh;
+  private readonly dummy = new THREE.Object3D();
+
+  constructor() {
+    this.group.name = "shields";
+    this.dome = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(0.62, 14, 8, 0, Math.PI * 2, 0, Math.PI * 0.55),
+      new THREE.MeshBasicMaterial({ color: 0x7aa2ff, transparent: true, opacity: 0.2, side: THREE.DoubleSide, depthWrite: false }),
+      4,
+    );
+    this.dome.name = "shield-dome";
+    this.group.add(this.dome);
+  }
+
+  sync(positions: readonly THREE.Vector3[]): void {
+    const n = Math.min(positions.length, 4);
+    this.group.visible = n > 0;
+    for (let i = 0; i < n; i++) {
+      const p = positions[i]!;
+      this.dummy.position.set(p.x, 0.08, p.z);
+      this.dummy.rotation.set(0, 0, 0);
+      this.dummy.updateMatrix();
+      this.dome.setMatrixAt(i, this.dummy.matrix);
+    }
+    this.dome.count = n;
+    this.dome.instanceMatrix.needsUpdate = true;
+  }
+
+  dispose(): void {
+    this.dome.geometry.dispose();
+    (this.dome.material as THREE.Material).dispose();
+    this.dome.dispose();
+  }
+}
+
 interface RigState {
   mode: CameraMode;
   yaw: number;
@@ -79,6 +179,9 @@ interface SceneState {
   world: WorldBuild;
   fx: FxSystem;
   rigs: Map<number, TankRig>;
+  /** 地雷标记与防御护罩：只有观战/回放看得到的状态（脚本侧没有这些字段） */
+  mines: MineMarkers;
+  shields: ShieldDomes;
   rig: RigState;
   raf: number;
   last: number;
@@ -184,6 +287,10 @@ export function BattleScene3D(props: BattleScene3DProps) {
     scene.add(world.group);
     const fx = new FxSystem();
     scene.add(fx.group);
+    const mines = new MineMarkers();
+    scene.add(mines.group);
+    const shields = new ShieldDomes();
+    scene.add(shields.group);
 
     const rigs = new Map<number, TankRig>();
     for (const seat of Object.keys(props.view.tanks).map(Number).sort((a, b) => a - b)) {
@@ -195,7 +302,7 @@ export function BattleScene3D(props: BattleScene3DProps) {
     const box = mount.getBoundingClientRect();
     const aspect = Math.max(0.2, box.width / Math.max(1, box.height));
     const state: SceneState = {
-      renderer, scene, camera, world, fx, rigs,
+      renderer, scene, camera, world, fx, rigs, mines, shields,
       rig: {
         mode: props.camera,
         yaw: 0.65, pitch: 0.68, dist: fitDistance(spanX, spanZ, ORBIT_FOV, aspect),
@@ -337,6 +444,8 @@ export function BattleScene3D(props: BattleScene3DProps) {
       for (const rig of rigs.values()) rig.dispose();
       world.dispose();
       fx.dispose();
+      mines.dispose();
+      shields.dispose();
       renderer.dispose();
       renderer.domElement.remove();
       stateRef.current = null;
@@ -491,6 +600,18 @@ function step(state: SceneState, props: BattleScene3DProps, dt: number): void {
   }
   state.snap = false;
 
+  // 3.5) 地雷与防御护罩：观战/回放可见、脚本不可感知的两样状态。
+  //      地雷只在上帝视角画；护罩跟着车的插值位置走，并尊重该座位自己的视野（看不见的车也不显示护罩）。
+  state.mines.sync(view.mines, worldX, worldZ, props.viewpoint === null);
+  const shieldPos: THREE.Vector3[] = [];
+  for (const rig of state.rigs.values()) {
+    const t = view.tanks[rig.seat];
+    if (!t || !t.alive || t.defendLeft <= 0) continue;
+    if (props.viewpoint !== null && rig.seat !== props.viewpoint && !rig.group.visible) continue;
+    shieldPos.push(rig.group.position);
+  }
+  state.shields.sync(shieldPos);
+
   // 4) 相机
   const cam = state.camera;
   const r = state.rig;
@@ -637,9 +758,31 @@ function applyCommand(state: SceneState, props: BattleScene3DProps, cmd: FxComma
       state.fx.text(at(cmd.at).setY(0.9), `油 +${cmd.fuelAdded}`, "#6ee7b7");
       break;
     }
+    case "defend": {
+      // 举盾：一圈蓝色护罩从车底升起（"立起盾"的读法），并标出剩余轮数
+      state.fx.ring(at(cmd.at), 0x7aa2ff, 1.5, 0.9);
+      state.fx.text(at(cmd.at).setY(1.05), `🛡 ${cmd.rounds} 轮`, "#bfdbfe");
+      break;
+    }
+    case "deployMine": {
+      // 布雷：地上一小圈尘土 —— 观众知道"这里埋了东西"，而脚本什么也看不到
+      state.fx.ring(at(cmd.at), 0xff6b6b, 0.8, 0.45);
+      state.fx.dust(at(cmd.at).setY(0.12));
+      break;
+    }
+    case "mineTrigger": {
+      // 触雷：比炮击更"土"的爆炸 —— 先爆开再扬尘，镜头也跟着晃
+      const p = at(cmd.at).setY(0.3);
+      state.fx.explosion(p, 1.25);
+      state.fx.dust(p.clone().setY(0.12));
+      state.fx.ring(at(cmd.at), 0xff8a5b, 2.4, 0.7);
+      state.fx.text(at(cmd.at).setY(1.1), `💥 P${cmd.owner} 的雷`, "#fca5a5");
+      shakeNear(state, props, at(cmd.at), 1.9);
+      break;
+    }
     case "death": {
       const p = at(cmd.at).setY(0.35);
-      state.fx.explosion(p, 1);
+      state.fx.explosion(p, cmd.cause === "mine" ? 1.15 : 1);
       shakeNear(state, props, at(cmd.at), 1.6);
       const rig = rigOf(cmd.seat);
       if (rig) rig.setGhost(null);

@@ -14,10 +14,10 @@ import {
 import { rulesetToMarkdownTable } from "./rules-table.ts";
 import { formatBytes } from "./format.ts";
 
-export const TASK_DOC_VERSION = "v1.2";
+export const TASK_DOC_VERSION = "v1.3";
 
 /** 脚本协议版本：协议正文（task-doc §5）任何影响脚本行为的改动都必须升这个号 */
-export const SCRIPT_PROTOCOL_VERSION = "p1.0";
+export const SCRIPT_PROTOCOL_VERSION = "p1.1";
 
 export interface UploadLimitsPublic {
   zipMaxBytes: number;
@@ -117,7 +117,7 @@ export const MAP_SPEC_EXAMPLE: GameMap = {
   ],
   depositPoints: [{ x: 4, y: 3 }, { x: 4, y: 5 }],
   // 车辆参数覆盖：可只写要改的项，缺省沿用 RULES（示形状；真实赛图可能没有这一块）
-  tuning: { ammoMax: 5 },
+  tuning: { ammoMax: 5, mineMax: 2 },
 };
 
 /** §6.2 字符表：字符与含义都从 protocol 取，改引擎就是改任务书 */

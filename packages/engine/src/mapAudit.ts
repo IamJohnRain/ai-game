@@ -240,11 +240,17 @@ export function auditMap(map: GameMap, rules: Ruleset = DEFAULT_RULESET): MapAud
   const tuning = map.tuning;
   if (tuning) {
     if (tuning.ammoMax === 0) {
-      warnings.push("车辆参数：载弹上限 0 —— 这张图禁止相互攻击，比分只能靠采集与提交");
+      const minesLeft = eff.mineMax;
+      warnings.push(
+        minesLeft > 0
+          ? `车辆参数：载弹上限 0 —— 炮弹互射被禁，但地雷上限 ${minesLeft}，踩雷照样清空血量（想彻底没战斗就把地雷上限也写 0）`
+          : "车辆参数：载弹上限 0 —— 这张图禁止相互攻击，比分只能靠采集与提交",
+      );
     } else if (tuning.ammoMax !== undefined && tuning.ammoMax < eff.loadAmmoPerAction) {
       warnings.push(`车辆参数：载弹上限 ${tuning.ammoMax} 发 < 一次装弹 ${eff.loadAmmoPerAction} 发：每次来补给点都装不满上限`);
     }
     if (tuning.cargoMax === 0) warnings.push("车辆参数：载货上限 0 —— 一单位资源都装不下，得分只能来自击杀");
+    if (tuning.mineMax === 0) warnings.push("车辆参数：地雷上限 0 —— 这张图没有地雷，布雷动作永远无效（NO_MINE）");
     if (tuning.hpMax !== undefined && tuning.hpMax <= eff.shellDamage) {
       warnings.push(`车辆参数：血量上限 ${tuning.hpMax} ≤ 一炮伤害 ${eff.shellDamage}：一炮一条命，回合数会很短`);
     }
@@ -253,6 +259,7 @@ export function auditMap(map: GameMap, rules: Ruleset = DEFAULT_RULESET): MapAud
     if (eff.initial.hp !== rules.initial.hp) clamped.push(`血量 ${eff.initial.hp}`);
     if (eff.initial.ammo !== rules.initial.ammo) clamped.push(`载弹 ${eff.initial.ammo}`);
     if (eff.initial.cargo !== rules.initial.cargo) clamped.push(`载货 ${eff.initial.cargo}`);
+    if (eff.initial.mines !== rules.initial.mines) clamped.push(`地雷 ${eff.initial.mines}`);
     if (clamped.length > 0) warnings.push(`上限调低后出生补给会被夹住：${clamped.join(" / ")}（复活同理）`);
   }
 

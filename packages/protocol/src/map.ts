@@ -43,12 +43,14 @@ export type SupplyPoint = z.infer<typeof SupplyPointSchema>;
 
 /**
  * 地图级车辆参数：只写要改的项，其余沿用 RULES。**ammoMax = 0 表示禁止相互攻击**（装不了弹就打不出去，
- * 变成纯经济局）；引擎会把 initial/respawn 夹到新上限之内，否则"上限 0"的图里坦克照样带着初始弹药出门。
+ * 变成纯经济局；想让地雷也一起禁掉就把 mineMax 也写 0）；引擎会把 initial/respawn 夹到新上限之内，
+ * 否则"上限 0"的图里坦克照样带着初始弹药/地雷出门。
  */
 export const MapTuningSchema = z.object({
   hpMax: z.number().int().positive().optional(),
   ammoMax: z.number().int().nonnegative().optional(),
   cargoMax: z.number().int().nonnegative().optional(),
+  mineMax: z.number().int().nonnegative().optional(),
 });
 export type MapTuning = z.infer<typeof MapTuningSchema>;
 

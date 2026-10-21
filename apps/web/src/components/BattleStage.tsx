@@ -380,6 +380,9 @@ function commandGrid(cmd: FxCommand): GridPos | null {
     case "deposit":
     case "loadAmmo":
     case "refuel":
+    case "defend":
+    case "deployMine":
+    case "mineTrigger":
     case "death":
     case "respawn":
     case "invalid":

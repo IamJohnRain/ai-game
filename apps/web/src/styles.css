@@ -1099,6 +1099,26 @@ textarea {
   color: var(--danger);
 }
 
+/* 防御中：只有观战能看到的状态（脚本看不到对手的这个字段），和"在场/阵亡"区分开 */
+.defend-tag {
+  font-size: 12px;
+  font-weight: 700;
+  color: #bfdbfe;
+  background: rgba(122, 162, 255, 0.16);
+  border: 1px solid rgba(122, 162, 255, 0.45);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
+/* 图例里的"状态"项（地雷/防御不是地形字符，没有素材缩略图）：用一个符号代替 */
+.legend-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  background: #0b0e14;
+}
+
 .card-foot {
   display: flex;
   flex-wrap: wrap;

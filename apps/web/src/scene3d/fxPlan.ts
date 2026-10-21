@@ -17,12 +17,15 @@ export interface GridPos {
 
 export type FxCommand =
   | { kind: "move"; seat: number; from: GridPos; to: GridPos; emergency: boolean }
-  | { kind: "fire"; seat: number; from: GridPos; to: GridPos; hit: boolean; targetSeat: number | null; damage: number }
+  | { kind: "fire"; seat: number; from: GridPos; to: GridPos; hit: boolean; targetSeat: number | null; damage: number; blocked: boolean }
   | { kind: "collect"; seat: number; at: GridPos; node: string; amount: number; remaining: number }
   | { kind: "deposit"; seat: number; at: GridPos; units: number; scoreDelta: number }
   | { kind: "loadAmmo"; seat: number; at: GridPos; rounds: number; scoreDelta: number }
   | { kind: "refuel"; seat: number; at: GridPos; fuelAdded: number; scoreDelta: number }
-  | { kind: "death"; seat: number; at: GridPos; killerSeat: number | null }
+  | { kind: "defend"; seat: number; at: GridPos; rounds: number }
+  | { kind: "deployMine"; seat: number; at: GridPos }
+  | { kind: "mineTrigger"; seat: number; at: GridPos; owner: number }
+  | { kind: "death"; seat: number; at: GridPos; killerSeat: number | null; cause: "fire" | "mine" }
   | { kind: "respawn"; seat: number; at: GridPos }
   | { kind: "invalid"; seat: number; at: GridPos; reason: string }
   | { kind: "disqualified"; seat: number; at: GridPos }
@@ -32,7 +35,8 @@ export type FxCommand =
 /** 音效种类：与 apps/web/src/sfx.ts 的 SfxKind 对齐（这里只用字符串，避免两处类型互相牵扯） */
 export type FxSound =
   | "fire" | "hit" | "miss" | "collect" | "deposit" | "refuel" | "loadAmmo"
-  | "death" | "respawn" | "invalid" | "disqualified" | "tread" | "end";
+  | "death" | "respawn" | "invalid" | "disqualified" | "tread" | "end"
+  | "defend" | "mineDeploy" | "mineBlast";
 
 export interface PlanInput {
   /** 本帧真正被应用的事件（顺序与引擎事件流一致；调用方负责截断到合理的条数） */
@@ -80,6 +84,7 @@ export function planFx(input: PlanInput): FxCommand[] {
           hit: e.hit,
           targetSeat: e.targetSeat,
           damage: e.damage,
+          blocked: Boolean(e.blocked),
         });
         break;
       }
@@ -96,10 +101,22 @@ export function planFx(input: PlanInput): FxCommand[] {
         out.push({ kind: "refuel", seat: e.seat, at: at(e.seat), fuelAdded: e.fuelAdded, scoreDelta: e.scoreDelta });
         break;
       case "death": {
-        out.push({ kind: "death", seat: e.seat, at: { x: e.pos.x, y: e.pos.y }, killerSeat: e.killerSeat });
+        out.push({
+          kind: "death", seat: e.seat, at: { x: e.pos.x, y: e.pos.y }, killerSeat: e.killerSeat,
+          cause: e.cause === "mine" ? "mine" : "fire",
+        });
         pos[e.seat] = { x: e.pos.x, y: e.pos.y };
         break;
       }
+      case "defend":
+        out.push({ kind: "defend", seat: e.seat, at: at(e.seat), rounds: e.rounds });
+        break;
+      case "deploy_mine":
+        out.push({ kind: "deployMine", seat: e.seat, at: { x: e.x, y: e.y } });
+        break;
+      case "mine_trigger":
+        out.push({ kind: "mineTrigger", seat: e.seat, at: { x: e.x, y: e.y }, owner: e.owner });
+        break;
       case "respawn": {
         out.push({ kind: "respawn", seat: e.seat, at: { x: e.pos.x, y: e.pos.y } });
         pos[e.seat] = { x: e.pos.x, y: e.pos.y };
@@ -134,9 +151,16 @@ export function planFx(input: PlanInput): FxCommand[] {
 export function soundFor(command: FxCommand): { kind: FxSound; seat: number | null } | null {
   switch (command.kind) {
     case "fire":
-      return { kind: "fire", seat: command.seat };
+      // 被防御弹开的那一炮换成"护盾吃弹"的音色：听起来就像打在装甲上，而不是打进了车体
+      return { kind: command.blocked ? "defend" : "fire", seat: command.seat };
     case "death":
       return { kind: "death", seat: command.killerSeat ?? command.seat };
+    case "defend":
+      return { kind: "defend", seat: command.seat };
+    case "deployMine":
+      return { kind: "mineDeploy", seat: command.seat };
+    case "mineTrigger":
+      return { kind: "mineBlast", seat: command.seat };
     case "move":
       return command.emergency ? { kind: "tread", seat: command.seat } : null; // 普通移动的履带声太密集，只在应急移动时给一下
     case "deposit":
@@ -173,12 +197,16 @@ export function commandPosition(command: FxCommand): GridPos | null {
   switch (command.kind) {
     case "fire":
       return command.to;
+    case "mineTrigger":
+      return command.at;
     case "move":
       return command.to;
     case "collect":
     case "deposit":
     case "loadAmmo":
     case "refuel":
+    case "defend":
+    case "deployMine":
     case "death":
     case "respawn":
     case "invalid":

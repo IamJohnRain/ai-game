@@ -581,3 +581,301 @@ test("基线脚本在有库存的补给点上不刷无效动作：看见采空�
   assert.ok(res.ranking.some((r) => r.unitsDeposited > 0), "经济仍应转起来");
   assert.ok(res.events.some((e) => e.t === "supply_regen"), "库存应当有回充事件");
 });
+
+// ==================================================================
+// 防御（defend）与地雷（deployMine）：docs/02 §4/§5 的两条新规则
+// ==================================================================
+
+/** 必中的命中分档：防御/地雷这类"伤害有没有落地"的断言不该被命中率掷骰干扰 */
+const ALWAYS_HIT: Partial<Ruleset> = { hitChanceBands: [{ maxDistance: 8, chance: 100 }] };
+
+/** 跑一局用固定出生点的对局（新机制都在小范围内测，位置全部写死） */
+function runAt(
+  controller: TurnController,
+  spawns: { seat: number; pos: { x: number; y: number } }[],
+  override?: Partial<Ruleset>,
+  gameMap: GameMap = map,
+): ReturnType<typeof runMatch> {
+  return runMatch({
+    matchId: "new-mechanics",
+    map: gameMap,
+    rules: { ...rules, maxRounds: 8, ...override },
+    seed: 777,
+    seats: spawns.map((s) => ({ seat: s.seat, name: `P${s.seat}`, scriptHash: `h${s.seat}` })),
+    spawns,
+    controller,
+  });
+}
+
+test("防御：占满整回合、挡下炮弹两轮，且对敌方脚本完全不可见", () => {
+  const seen1: State[] = [];
+  const seen2: State[] = [];
+  const ctrl = new ScriptedController({
+    // P1 在 (2,2)，第 2~4 轮各打一发（距离 3，必中档）
+    1: (s) => {
+      seen1.push(s);
+      return s.round >= 2 && s.round <= 4 ? [{ type: "fire", target: { x: 5, y: 3 } }] : [{ type: "wait" }];
+    },
+    // P2 在 (5,3)：第 1 轮举盾，其余等待
+    2: (s) => {
+      seen2.push(s);
+      return s.round === 1 ? [{ type: "defend" }] : [{ type: "wait" }];
+    },
+  });
+  const res = runAt(ctrl, [{ seat: 1, pos: { x: 2, y: 2 } }, { seat: 2, pos: { x: 5, y: 3 } }], ALWAYS_HIT);
+
+  const fires = res.events.filter((e) => e.t === "fire") as Extract<MatchEvent, { t: "fire" }>[];
+  assert.equal(fires.length, 3, "P1 应当打了 3 发（第 2/3/4 轮各一发）");
+  assert.equal(fires[0]!.blocked, true, "第 2 轮打在盾上");
+  assert.equal(fires[0]!.damage, 0);
+  assert.equal(fires[1]!.blocked, undefined, "第 3 轮盾已到期，伤害落地");
+  assert.equal(fires[1]!.damage, rules.shellDamage);
+  assert.equal(fires[2]!.damage, rules.shellDamage);
+
+  // 防御状态只在自己的 self 里可见：1 轮内计数 2→1，发起轮 + 下一轮共两轮受保护。
+  // 注意 self 是"本回合动作尚未执行"的快照，所以血量比"第 N 轮挨的那一发"慢一拍。
+  assert.deepEqual(
+    seen2.map((s) => [s.round, s.self.defendLeft, s.self.hp]),
+    [[1, 0, 100], [2, 1, 100], [3, 0, 80], [4, 0, 80], [5, 0, 60], [6, 0, 60], [7, 0, 60], [8, 0, 60]],
+    "self.defendLeft 应当是 0→（举盾后）1→0：发起轮与下一轮受保护，两轮后失效",
+  );
+
+  // 对方视角：既没有 defendLeft，也没有任何"他在防御"的字段
+  const enemyView = seen1[1]!.enemies[0]!;
+  assert.ok(!("defendLeft" in enemyView), `敌人视图不得暴露防御状态，实际字段：${Object.keys(enemyView).join(",")}`);
+  // 打中盾上的那一发，在脚本侧只是一条 damage 0 的命中记录（没有 blocked 这样的显式标记）
+  const hitEv = seen1[2]!.events.find((e) => e.type === "hit")!;
+  assert.equal(hitEv.damage, 0);
+  assert.ok(!("blocked" in hitEv), "脚本可见的事件里不该有'被防御挡下'这种明确标记");
+
+  // 观战视图：跨轮之后防御计数要跟着走（回放靠它画护盾标记）
+  const upToRound2 = res.events.slice(0, res.events.findIndex((e) => e.t === "turn_begin" && e.round === 2) + 1);
+  assert.equal(reduceEvents(map, rules, upToRound2).tanks[2]!.defendLeft, 1, "观战视图里第 2 轮应当还带着 1 轮防御");
+  assert.equal(reduceEvents(map, rules, res.events).tanks[2]!.defendLeft, 0, "终局应当归零");
+});
+
+test("防御占满整回合：同回合里排在它后面的动作会因为 AP 用尽被 NO_AP 拒绝", () => {
+  const seen1: State[] = [];
+  const seen2: State[] = [];
+  const ctrl = new ScriptedController({
+    1: (s) => {
+      seen1.push(s);
+      return s.round === 1 ? [{ type: "defend" }, { type: "move", dir: "E" }] : [{ type: "wait" }];
+    },
+    2: (s) => {
+      seen2.push(s);
+      return s.round === 1 ? [{ type: "move", dir: "W" }, { type: "defend" }] : [{ type: "wait" }];
+    },
+  });
+  const res = runAt(ctrl, [{ seat: 1, pos: { x: 2, y: 2 } }, { seat: 2, pos: { x: 5, y: 3 } }]);
+
+  const noAp = res.events.filter((e) => e.t === "invalid_action" && e.reason === "NO_AP");
+  assert.equal(noAp.length, 2, `两侧都应当各吃一次 NO_AP，实际 ${noAp.length}`);
+  assert.equal(seen1[1]!.self.pos.x, 2, "防御已经把 AP 花光，后面的移动不该生效");
+  assert.equal(seen1[1]!.self.defendLeft, 1, "防御本身照样立起来了（含发起轮共两轮）");
+  assert.equal(seen2[1]!.self.pos.x, 4, "先移动后防御：移动生效");
+  assert.equal(seen2[1]!.self.defendLeft, 0, "防御轮到它时 AP 只剩 1 点，立不起来");
+});
+
+test("地雷：埋下后脚本完全不可见，踩上去立刻清空血量，击杀奖励归埋雷方", () => {
+  const seen2: State[] = [];
+  const ctrl = new ScriptedController({
+    1: (s) => {
+      const n = s.round;
+      if (n === 1) return [{ type: "move", dir: "E" }, { type: "move", dir: "E" }]; // (2,2) → (4,2)
+      if (n === 2) return [{ type: "move", dir: "E" }, { type: "deployMine" }];      // (4,2) → (5,2)，在弹药点上埋雷
+      if (n === 3) return [{ type: "move", dir: "W" }, { type: "move", dir: "W" }]; // 撤到 (3,2)，别踩自己的雷
+      return [{ type: "wait" }];
+    },
+    2: (s) => {
+      seen2.push(s);
+      if (s.round === 3) return [{ type: "move", dir: "W" }, { type: "move", dir: "W" }]; // (7,2) → (6,2) → (5,2)
+      return [{ type: "wait" }];
+    },
+  });
+  const res = runAt(ctrl, [{ seat: 1, pos: { x: 2, y: 2 } }, { seat: 2, pos: { x: 7, y: 2 } }]);
+
+  const deploy = res.events.find((e) => e.t === "deploy_mine") as Extract<MatchEvent, { t: "deploy_mine" }>;
+  assert.ok(deploy, "应当有布雷事件");
+  assert.equal(deploy.seat, 1);
+  assert.equal(deploy.x, 5);
+  assert.equal(deploy.y, 2);
+  assert.equal(deploy.minesAfter, 1, "两枚雷用掉一枚");
+
+  const trigger = res.events.find((e) => e.t === "mine_trigger") as Extract<MatchEvent, { t: "mine_trigger" }>;
+  assert.ok(trigger, "P2 走进雷格应当触发");
+  assert.equal(trigger.seat, 2);
+  assert.equal(trigger.owner, 1);
+  assert.deepEqual([trigger.x, trigger.y], [5, 2]);
+
+  const death = res.events.find((e) => e.t === "death") as Extract<MatchEvent, { t: "death" }>;
+  assert.equal(death.seat, 2);
+  assert.equal(death.killerSeat, 1, "埋雷方按击杀记账");
+  assert.equal(death.cause, "mine");
+  assert.equal(death.pos.x, 5);
+  assert.equal(death.pos.y, 2);
+
+  const p1 = res.stats[1]!;
+  const p2 = res.stats[2]!;
+  assert.equal(p1.kills, 1);
+  assert.equal(p1.mineKills, 1);
+  assert.equal(p1.minesDeployed, 1);
+  assert.equal(p1.score, rules.killReward, "埋雷方只拿击杀奖励（埋雷本身不扣分）");
+  assert.equal(p2.deaths, 1);
+  assert.equal(p2.scoreBreakdown.death, -rules.deathPenalty);
+  // 触发器之前（雷还埋在图上）脚本看到的状态里不能有雷的痕迹
+  const live = seen2[2]!;
+  assert.ok(!Object.prototype.hasOwnProperty.call(live, "mines"), "state 顶层不该有雷的位置");
+  assert.ok(!Object.prototype.hasOwnProperty.call(live.enemies[0]!, "mines"), "连敌人身上有几枚雷也不该暴露");
+
+  // 观战/回放这边相反：雷要画得出来，踩响之后要消失
+  const beforeTrigger = res.events.slice(0, res.events.findIndex((e) => e.t === "mine_trigger"));
+  const view = reduceEvents(map, rules, beforeTrigger);
+  assert.equal(view.mines.length, 1, "观战视图应当能看到未触发的雷");
+  assert.deepEqual(
+    { x: view.mines[0]!.x, y: view.mines[0]!.y, owner: view.mines[0]!.owner },
+    { x: 5, y: 2, owner: 1 },
+  );
+  assert.equal(reduceEvents(map, rules, res.events).mines.length, 0, "触发过的雷要从观战视图里消失");
+});
+
+test("地雷不分敌我：自己踩自己的雷照样清空血量，但没有击杀奖励", () => {
+  const seen1: State[] = [];
+  const ctrl = new ScriptedController({
+    1: (s) => {
+      seen1.push(s);
+      if (s.round === 1) return [{ type: "move", dir: "E" }, { type: "deployMine" }];  // (2,2) → (3,2) 埋雷
+      if (s.round === 2) return [{ type: "move", dir: "W" }, { type: "move", dir: "E" }]; // 走出去再走回来 → 踩响
+      return [{ type: "wait" }];
+    },
+    2: () => [{ type: "wait" }],
+  });
+  const res = runAt(ctrl, [{ seat: 1, pos: { x: 2, y: 2 } }, { seat: 2, pos: { x: 29, y: 21 } }]);
+
+  const death = res.events.find((e) => e.t === "death") as Extract<MatchEvent, { t: "death" }>;
+  assert.equal(death.seat, 1);
+  assert.equal(death.killerSeat, null, "自己踩的雷不算别人击杀");
+  assert.equal(death.cause, "mine");
+  assert.equal(res.stats[1]!.kills, 0);
+  assert.equal(res.stats[1]!.score, -rules.deathPenalty, "只扣死亡惩罚，没有击杀奖励");
+  assert.equal(res.stats[1]!.minesDeployed, 1);
+
+  // 复活时地雷按 respawn 补给补满（和开局一样是满的）
+  const afterRespawn = seen1[seen1.length - 1]!;
+  assert.equal(afterRespawn.self.mines, rules.respawn.mines, "复活应当补满地雷");
+  assert.equal(afterRespawn.self.pos.x, 2, "复活回到出生点");
+  assert.equal(afterRespawn.self.defendLeft, 0, "复活后不带防御");
+});
+
+test("地雷无视防御：举着盾踩雷照样清空血量（防御只挡炮弹）", () => {
+  const seen2: State[] = [];
+  const ctrl = new ScriptedController({
+    1: (s) => {
+      if (s.round === 1) return [{ type: "move", dir: "E" }, { type: "move", dir: "E" }];
+      if (s.round === 2) return [{ type: "move", dir: "E" }, { type: "deployMine" }];      // 在 (5,2) 埋雷
+      if (s.round === 3) return [{ type: "move", dir: "W" }, { type: "move", dir: "W" }];
+      return [{ type: "wait" }];
+    },
+    2: (s) => {
+      seen2.push(s);
+      if (s.round === 3) return [{ type: "defend" }];                                     // 举盾（整回合）
+      if (s.round === 4) return [{ type: "move", dir: "W" }, { type: "move", dir: "W" }]; // 举着盾踩上去
+      return [{ type: "wait" }];
+    },
+  });
+  const res = runAt(ctrl, [{ seat: 1, pos: { x: 2, y: 2 } }, { seat: 2, pos: { x: 7, y: 2 } }]);
+
+  assert.equal(seen2[3]!.self.defendLeft, 1, "第 4 轮开始时盾还在（1 轮剩余）");
+  const death = res.events.find((e) => e.t === "death") as Extract<MatchEvent, { t: "death" }>;
+  assert.equal(death.seat, 2);
+  assert.equal(death.cause, "mine", "石头下面的雷不认盾");
+  assert.equal(res.stats[2]!.deaths, 1);
+  assert.equal(res.stats[1]!.mineKills, 1);
+});
+
+test("弹药点补给地雷：弹药满了照样能取雷（不额外收费），取雷也吃补给点库存", () => {
+  const depotMap = arenaWith({
+    ammo: { capacity: 12, initial: 12, regenEveryRounds: 3 },
+    tuning: { ammoMax: 5 },
+  });
+  const ctrl = new ScriptedController({
+    // 出生就站在弹药点 (5,2) 上；出门的载弹被 ammoMax=5 夹满，能补的只有雷
+    1: (s) => {
+      if (s.round === 1) return [{ type: "deployMine" }];
+      if (s.round === 2 || s.round === 3) return [{ type: "loadAmmo" }];
+      return [{ type: "wait" }];
+    },
+    2: () => [{ type: "wait" }],
+  });
+  const res = runAt(ctrl, [{ seat: 1, pos: { x: 5, y: 2 } }, { seat: 2, pos: { x: 29, y: 21 } }], undefined, depotMap);
+
+  const load = res.events.find((e) => e.t === "load_ammo") as Extract<MatchEvent, { t: "load_ammo" }>;
+  assert.ok(load, "第 2 轮应当装得动（只取雷）");
+  assert.equal(load.rounds, 0, "弹药已经是上限，取 0 发");
+  assert.equal(load.mines, 1);
+  assert.equal(load.minesAfter, 2);
+  assert.equal(load.scoreDelta, 0, "地雷不额外收费：代价是跑一趟与随身位，不是分数");
+  assert.equal(load.depotRemainingAfter, 11, "取雷也要吃补给点的库存");
+  assert.equal(res.stats[1]!.scoreBreakdown.ammo, 0);
+
+  const full = res.events.filter((e) => e.t === "invalid_action" && e.reason === "AMMO_FULL");
+  assert.equal(full.length, 1, "弹与雷都满了之后，再按装弹应当被 AMMO_FULL 拒绝");
+});
+
+test("车辆参数：地雷上限 0 = 这张图没有雷（出门 0 枚、布雷直接 NO_MINE）", () => {
+  const seen1: State[] = [];
+  const ctrl = new ScriptedController({
+    1: (s) => {
+      seen1.push(s);
+      return [{ type: "deployMine" }];
+    },
+    2: () => [{ type: "wait" }],
+  });
+  const res = runAt(ctrl, [{ seat: 1, pos: { x: 2, y: 2 } }, { seat: 2, pos: { x: 29, y: 21 } }], undefined, arenaWith({ tuning: { mineMax: 0 } }));
+
+  assert.equal(seen1[0]!.self.mines, 0);
+  assert.equal(seen1[0]!.self.minesMax, 0);
+  assert.equal(res.events.filter((e) => e.t === "deploy_mine").length, 0);
+  const noMine = res.events.filter((e) => e.t === "invalid_action" && e.reason === "NO_MINE");
+  assert.equal(noMine.length, seen1.length, "每一回合的布雷都应当被 NO_MINE 拒绝");
+});
+
+test("基线脚本会用新机制：一炮就能被打死、对手又贴到身边时会举盾（对手的炮弹被挡下）", () => {
+  // 让基线出门就只剩一炮的血（initial.hp = shellDamage）；对面是一台"站着开火"的固定脚本，
+  // 两格距离、必中档。基线第 1 轮先手就会举盾（它自己的盾先立起来，那发炮弹随后飞来）→ 应当出现 blocked。
+  const ctrl = new LocalController();
+  ctrl.load(1, baselineScript);
+  ctrl.load(2, `function onTurn() { return [{ type: "fire", target: { x: 2, y: 2 } }]; }`);
+  const res = runMatch({
+    matchId: "baseline-defend",
+    map,
+    rules: { ...rules, maxRounds: 12, initial: { ...rules.initial, hp: rules.shellDamage }, hitChanceBands: [{ maxDistance: 8, chance: 100 }] },
+    seed: 20261023,
+    seats: [{ seat: 1, name: "P1", scriptHash: "b1" }, { seat: 2, name: "P2", scriptHash: "gun" }],
+    spawns: [{ seat: 1, pos: { x: 2, y: 2 } }, { seat: 2, pos: { x: 4, y: 2 } }],
+    controller: ctrl,
+  });
+  ctrl.dispose();
+  assert.equal(res.ranking.reduce((s, r) => s + r.strikes, 0), 0, "基线不该有 strike");
+  assert.ok(res.events.some((e) => e.t === "defend"), "血只剩一炮、对手就在两格外，基线应当举盾");
+  const blocked = res.events.filter((e): e is Extract<MatchEvent, { t: "fire" }> => e.t === "fire" && e.blocked === true);
+  assert.ok(blocked.length >= 1, "举盾那两轮里飞来的炮弹必须被挡下（伤害 0）");
+  assert.equal(blocked[0]!.damage, 0);
+  // 自己的雷自己踩 = 记性出了问题：这条断言专门盯着 OWN_MINES 那段逻辑
+  const ownMineDeaths = res.events.filter(
+    (e) => e.t === "death" && e.cause === "mine" && e.killerSeat === null,
+  );
+  assert.equal(ownMineDeaths.length, 0, `基线不该踩到自己埋的雷，实际 ${ownMineDeaths.length} 次`);
+});
+
+test("基线脚本在普通图上也会布雷，且布雷不产生无效动作", () => {
+  const res = runBaselineOn(map);
+  const deployed = res.ranking.reduce((s, r) => s + r.minesDeployed, 0);
+  assert.ok(deployed > 0, "提交点/中央资源点都是布雷点，基线应当顺手埋上几枚");
+  assert.ok(res.ranking.reduce((s, r) => s + r.invalidActions, 0) <= 2, "布雷不该带来无效动作");
+  assert.equal(res.ranking.reduce((s, r) => s + r.strikes, 0), 0);
+  // 踩到自己雷的场次不该出现（记忆失准则会在这里爆出来）
+  const own = res.events.filter((e) => e.t === "death" && e.cause === "mine" && e.killerSeat === null);
+  assert.equal(own.length, 0, "基线不该踩自己的雷");
+  assert.ok(res.events.filter((e) => e.t === "mine_trigger").length >= 0);
+});

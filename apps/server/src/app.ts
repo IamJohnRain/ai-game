@@ -321,10 +321,10 @@ app.get("/api/matches/:id/report", async (req, reply) => {
   // 没有留档战报（例如更早版本产生的数据）时用存档重建一份简要战报
   const lines = [`# 坦克对战战报 · ${id}`, "", `- 地图：${match.mapId}@${match.mapVersion}　规则：ruleset-${match.rulesetVersion}　种子：${match.seed}`,
     `- 复现键：\`${match.reproducibilityKey}\``, "", "## 排名", "",
-    "| 名次 | 座位 | Agent | 总分 | 提交单位 | 击杀 | 死亡 | 无效动作 |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- |"];
+    "| 名次 | 座位 | Agent | 总分 | 提交单位 | 击杀 | 死亡 | 布雷 | 无效动作 |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"];
   for (const st of replay.ranking) {
-    lines.push(`| ${st.rank} | P${st.seat} | ${st.name} | **${st.score}** | ${st.unitsDeposited} | ${st.kills} | ${st.deaths} | ${st.invalidActions} |`);
+    lines.push(`| ${st.rank} | P${st.seat} | ${st.name} | **${st.score}** | ${st.unitsDeposited} | ${st.kills} | ${st.deaths} | ${st.minesDeployed}（踩响 ${st.mineKills}） | ${st.invalidActions} |`);
   }
   lines.push("", "> 本战报由存档重建，完整逐项明细请调用 /replay 查看事件流。");
   reply.header("Content-Type", "text/markdown; charset=utf-8");

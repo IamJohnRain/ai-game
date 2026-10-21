@@ -78,6 +78,12 @@ export function buildReport(input: ReportInput): string {
       `  - 采集 ${st.unitsCollected} 单位、提交 ${st.deposits} 次、移动 ${st.moves} 步、` +
       `开火 ${st.shotsFired} 发、命中 ${st.hits} 次、造成伤害 ${st.damageDealt}、行动回合 ${st.turnsTaken}`,
     );
+    if (st.minesDeployed > 0) {
+      lines.push(
+        `  - 布雷 ${st.minesDeployed} 枚（其中 ${st.mineKills} 枚是对手踩响的）——地雷对所有人不可见、不分敌我，` +
+        `踩中即清空血量`,
+      );
+    }
   }
   lines.push("");
 
@@ -104,7 +110,8 @@ export function buildReport(input: ReportInput): string {
 
   lines.push("## 关键事件时间线", "");
   const timeline = result.events.filter((e) =>
-    e.t === "death" || e.t === "deposit" || e.t === "disqualified" || e.t === "strike" || e.t === "invalid_action");
+    e.t === "death" || e.t === "deposit" || e.t === "defend" || e.t === "mine_trigger"
+    || e.t === "disqualified" || e.t === "strike" || e.t === "invalid_action");
   const shown = timeline.slice(0, 60);
   for (const e of shown) lines.push(`- ${describeEvent(e)}`);
   if (timeline.length > shown.length) lines.push(`- …（另有 ${timeline.length - shown.length} 条事件，见回放）`);
@@ -115,8 +122,13 @@ export function buildReport(input: ReportInput): string {
 
 export function describeEvent(e: MatchEvent): string {
   switch (e.t) {
-    case "death": return `💀 P${e.seat} 被击毁${e.killerSeat !== null ? `（P${e.killerSeat}）` : ""} ${e.scoreDelta} 分`;
+    case "death":
+      return e.cause === "mine"
+        ? `💀 P${e.seat} 踩雷阵亡${e.killerSeat !== null ? `（P${e.killerSeat} 埋的）` : "（自己的雷）"} ${e.scoreDelta} 分`
+        : `💀 P${e.seat} 被击毁${e.killerSeat !== null ? `（P${e.killerSeat}）` : ""} ${e.scoreDelta} 分`;
     case "deposit": return `💰 P${e.seat} 提交 ${e.units} 单位 +${e.scoreDelta} 分（总分 ${e.scoreAfter}）`;
+    case "defend": return `🛡 P${e.seat} 举盾（${e.rounds} 轮内炮弹伤害全免）`;
+    case "mine_trigger": return `💥 P${e.seat} 在 (${e.x},${e.y}) 踩响 P${e.owner} 的地雷（清空血量）`;
     case "disqualified": return `⛔ P${e.seat} 被淘汰（${e.kind}）`;
     case "strike": return `⚠️ P${e.seat} ${e.kind}: ${e.detail.slice(0, 80)}`;
     case "invalid_action": return `⚠️ P${e.seat} 无效动作 ${e.reason}`;

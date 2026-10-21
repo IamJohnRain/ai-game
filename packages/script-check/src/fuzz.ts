@@ -60,16 +60,20 @@ export function generateFuzzStates(map: GameMap, rules: Ruleset, count: number, 
 
     const evCount = int(0, 4);
     const events: StateEvent[] = Array.from({ length: evCount }, () => {
-      const kind = int(0, 6);
+      const kind = int(0, 9);
       const other = pick(seats.filter((s) => s !== seat));
       switch (kind) {
         case 0: return { type: "hit", by: other, targetSeat: seat, damage: int(1, 30), pos: { ...pos }, round: int(1, rules.maxRounds) };
         case 1: return { type: "miss", by: seat, target: { x: pos.x, y: pos.y }, round: 1 };
+        // 死亡/踩雷两种死因都过一遍：脚本不能假设"死亡一定有凶手"
         case 2: return { type: "death", seat: other, killerSeat: seat, pos: { ...pos }, round: 1 };
         case 3: return { type: "respawn", seat: other, pos: { ...mySpawn }, round: 1 };
         case 4: return { type: "invalid_action", action: { type: "move", dir: pick(DIRS) }, reason: "BLOCKED_BY_WALL", round: 1 };
         case 5: return { type: "collect", seat, node: "R1", amount: 3, round: 1 };
-        default: return { type: "deposit", seat, units: 5, scoreDelta: 50, round: 1 };
+        case 6: return { type: "invalid_action", action: { type: "deployMine" }, reason: "NO_MINE", round: 1 };
+        case 7: return { type: "defend", seat, rounds: rules.defendRounds, round: 1 };
+        case 8: return { type: "deposit", seat, units: 5, scoreDelta: 50, round: 1 };
+        default: return { type: "death", seat: other, killerSeat: null, pos: { ...pos }, round: 1, cause: "mine" };
       }
     });
 
@@ -91,6 +95,10 @@ export function generateFuzzStates(map: GameMap, rules: Ruleset, count: number, 
         fuelMax: rules.fuelMax,
         cargo: rng() < 0.25 ? rules.cargoMax : int(0, rules.cargoMax),
         cargoMax: rules.cargoMax,
+        // 地雷：一半样本"没雷可布"、一半"身上有雷"；防御也随机给一个
+        mines: rng() < 0.5 ? 0 : int(0, rules.mineMax),
+        minesMax: rules.mineMax,
+        defendLeft: rng() < 0.25 ? int(1, rules.defendRounds) : 0,
         score: int(-150, 500),
         alive: true,
         disabledTurns: 0,

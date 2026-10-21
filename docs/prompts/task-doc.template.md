@@ -155,8 +155,9 @@ node --import tsx tools/cli/src/index.ts pack --script strategy.js --meta meta.j
 
 ### 6.6 车辆参数（地图可能覆盖 `RULES` 的上限）
 
-`MAP.tuning` 可能出现三种字段（可以只写其中几个，没写的沿用 `RULES`）：`hpMax`（血量上限）、`ammoMax`（载弹上限）、`cargoMax`（载货上限）。
+`MAP.tuning` 可能出现四种字段（可以只写其中几个，没写的沿用 `RULES`）：`hpMax`（血量上限）、`ammoMax`（载弹上限）、`cargoMax`（载货上限）、`mineMax`（随身地雷上限）。
 它同时会**夹住出生与复活的补给**：上限 5 发的图，你出门就只有 5 发；上限 0 的图，出门没有炮弹、也装不上——那种图上唯一的得分方式是采集与提交。
+**注意 `ammoMax: 0` 不等于"没有战斗"**：地雷不看载弹，踩中照样清空血量（`mineMax` 也是 0 才是真的没战斗）。
 
 写法要求：**凡是"上限"都读 `state.self.*`，凡是"价格/伤害/距离"都读 `RULES`**，两者都不要在脚本里写死。
 

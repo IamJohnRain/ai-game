@@ -143,6 +143,8 @@ function cmdCheckDocs(): void {
     ["`ammoMax` | 20", 20], ["`fuelMax` | 100", 100], ["`cargoMax` | 5", 5],
     ["`moveFuelCost` | 2", 2], ["`ammoPrice` | 2", 2], ["`deathPenalty` | 20", 20], ["`killReward` | 20", 20],
     ["`respawnRounds` | 3", 3], ["`fireRange` | 8", 8], ["`shellDamage` | 20", 20],
+    // 1.2 加的两条机制：防御持续轮数与随身地雷上限
+    ["`defendRounds` | 2", 2], ["`mineMax` | 2", 2],
   ];
   for (const [needle, value] of expectNumbers) {
     if (!rulesDoc.includes(needle)) {
@@ -208,6 +210,9 @@ function cmdCheckDocs(): void {
     "载货上限 `RULES.cargoMax`",
     "扣 `RULES.deathPenalty` 分",
     "跳过 `RULES.respawnRounds` 个自己的回合",
+    // 1.2 的两条机制同样必须引用字段而不是写死数字
+    "`RULES.defendRounds` 轮内**炮弹伤害被完全挡下**",
+    "随身携带上限 `RULES.mineMax` 枚",
   ];
   for (const needle of rulesReferences) {
     if (!core.includes(needle)) {
@@ -490,12 +495,15 @@ function cmdInspect(): void {
     switch (ev.t) {
       case "turn_begin": round = ev.round; break;
       case "move": if (ev.emergency) console.log(`${R} P${ev.seat} 应急移动 ${at(ev.from)}→${at(ev.to)}（油 ${ev.fuelAfter}）`); break;
-      case "fire": console.log(`${R} P${ev.seat} 开火→${at(ev.target)} ${ev.hit ? `命中 -${ev.damage}` : "未命中"}（弹 ${ev.ammoAfter}）`); break;
+      case "fire": console.log(`${R} P${ev.seat} 开火→${at(ev.target)} ${ev.hit ? (ev.blocked ? "命中但被防御弹开 -0" : `命中 -${ev.damage}`) : "未命中"}（弹 ${ev.ammoAfter}）`); break;
       case "collect": if (show) console.log(`${R} P${ev.seat} 采集 ${ev.node} +${ev.amount}（余 ${ev.remainingAfter}，载 ${ev.cargoAfter}）`); break;
       case "deposit": console.log(`${R} P${ev.seat} 提交 ${ev.units} 单位 +${ev.scoreDelta}（总分 ${ev.scoreAfter}）`); break;
-      case "load_ammo": if (show) console.log(`${R} P${ev.seat} 装弹 ${ev.rounds} 发 ${ev.scoreDelta}（分 ${ev.scoreAfter}）`); break;
+      case "load_ammo": if (show) console.log(`${R} P${ev.seat} 装弹 ${ev.rounds} 发 + 地雷 ${ev.mines ?? 0} 枚 ${ev.scoreDelta}（分 ${ev.scoreAfter}）`); break;
       case "refuel": if (show) console.log(`${R} P${ev.seat} 加油 ${ev.fuelAdded} ${ev.scoreDelta}（分 ${ev.scoreAfter}）`); break;
-      case "death": console.log(`${R} P${ev.seat} *** 阵亡 ***（凶手 P${ev.killerSeat ?? "-"}，分 ${ev.scoreAfter}）`); break;
+      case "defend": console.log(`${R} P${ev.seat} 举盾（${ev.rounds} 轮内炮弹伤害全免）`); break;
+      case "deploy_mine": console.log(`${R} P${ev.seat} 布雷 ${at({ x: ev.x, y: ev.y })}（剩 ${ev.minesAfter} 枚，全场不可见）`); break;
+      case "mine_trigger": console.log(`${R} P${ev.seat} *** 踩雷 *** ${at({ x: ev.x, y: ev.y })}（埋雷方 P${ev.owner}）`); break;
+      case "death": console.log(`${R} P${ev.seat} *** 阵亡 ***（${ev.cause === "mine" ? `踩了 P${ev.killerSeat ?? ev.seat} 的地雷` : `凶手 P${ev.killerSeat ?? "-"}`}，分 ${ev.scoreAfter}）`); break;
       case "respawn": console.log(`${R} P${ev.seat} 复活于 ${at(ev.pos)}`); break;
       case "invalid_action": console.log(`${R} P${ev.seat} 无效动作 ${ev.reason}`); break;
       case "strike": console.log(`${R} P${ev.seat} STRIKE ${ev.kind}: ${ev.detail}`); break;
@@ -519,6 +527,44 @@ function cmdInspect(): void {
   }
 }
 
+// ---------------------------------------------------------------- clean-results
+// 清空"成绩数据"：对局 / 回放 / 赛事 / 评测批次 / 练习记录。
+// 保留 Agent（含一次性密钥与上传历史）与地图——协议升版后重跑一批成绩时用得上；
+// 要连身份一起清就加 --all（相当于把 Agent 全部作废、需要重新注册）。
+const RESULT_TABLES = ["match_replays", "match_players", "matches", "tournaments", "cohorts", "practice_runs"] as const;
+const IDENTITY_TABLES = ["agent_revisions", "agents"] as const;
+
+async function cmdCleanResults(): Promise<void> {
+  const dataDir = arg("data", join(repoRoot, "data"))!;
+  const dbPath = join(dataDir, "ai-game.db");
+  if (!existsSync(dbPath)) throw new Error(`找不到数据库 ${dbPath}（用 --data <目录> 指定 data 目录）`);
+  const wipeAll = flag("all");
+  const yes = flag("yes");
+  const dryRun = flag("dry-run") || !yes;
+  const tables: string[] = [...RESULT_TABLES, ...(wipeAll ? IDENTITY_TABLES : [])];
+
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(dbPath);
+  try {
+    const counts = tables.map((t) => ({ table: t, rows: (db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n }));
+    console.log(`数据库：${dbPath}`);
+    for (const c of counts) console.log(`  ${c.table.padEnd(16)} ${String(c.rows).padStart(6)} 行`);
+    if (wipeAll) console.log("⚠ --all：Agent 与上传历史（含一次性密钥）也会被删除，外部 Agent 需要重新注册");
+    if (dryRun) {
+      console.log("\n（预演：没有删除任何数据。加上 --yes 才会真的清空。）");
+      console.log("提示：先备份，例如 tar czf data-$(date +%Y%m%d-%H%M).tar.gz -C " + dataDir + " .");
+      return;
+    }
+    db.exec("BEGIN");
+    for (const t of tables) db.exec(`DELETE FROM ${t}`);
+    db.exec("COMMIT");
+    db.exec("VACUUM");
+    console.log(`\n✅ 已清空 ${tables.length} 张表并 VACUUM${wipeAll ? "（含 Agent 身份）" : "（保留 Agent、密钥与地图）"}`);
+  } finally {
+    db.close();
+  }
+}
+
 function usage(): void {
   console.log(`AI 坦克对战平台 CLI
 
@@ -532,6 +578,11 @@ function usage(): void {
   inspect [--seed N] [--map duel-01] [--mode mirror|home|idle] [--script file.js] [--all]
                                     打印一局的逐回合轨迹（开火/阵亡/提交），人工判断地图是否打得起来；--all 连采集/补给也打印
   fuzz [--count 3]                  打印模糊测试样本状态
+
+运维：
+  clean-results [--data <目录>] [--yes] [--all] [--dry-run]
+                                    清空成绩数据（对局/回放/赛事/批次/练习），保留 Agent、密钥与地图；
+                                    --all 连 Agent 身份一起清；不给 --yes 时只预演并打印将删除的行数
 
 对外 Agent 流程（外部 Agent 只需这三条）：
   task-doc [--out task-doc.md] [--baseUrl http://host:8787]
@@ -553,6 +604,7 @@ async function main(): Promise<void> {
     case "simulate": await cmdSimulate(); break;
     case "check": await cmdCheck(); break;
     case "fuzz": cmdFuzz(); break;
+    case "clean-results": await cmdCleanResults(); break;
     case "inspect": cmdInspect(); break;
     case "demo": await cmdDemo(); break;
     case "task-doc": cmdTaskDoc(); break;

@@ -112,6 +112,7 @@ export function ReportPage({ matchId, onOpen }: ReportPageProps) {
                 <th>提交单位</th>
                 <th>击杀</th>
                 <th>死亡</th>
+                <th>布雷</th>
                 <th>无效动作</th>
                 <th>strike</th>
                 <th>平均决策</th>
@@ -137,6 +138,10 @@ export function ReportPage({ matchId, onOpen }: ReportPageProps) {
                       <td>{stats?.unitsDeposited ?? "-"}</td>
                       <td>{stats?.kills ?? "-"}</td>
                       <td>{stats?.deaths ?? "-"}</td>
+                      {/* 布雷与"被对手踩响"的枚数：这是新机制（地雷）在战报里的可见入口 */}
+                      <td title={stats ? `其中 ${stats.mineKills} 枚被对手踩响` : undefined}>
+                        {stats ? (stats.minesDeployed > 0 ? `${stats.minesDeployed}${stats.mineKills > 0 ? ` (踩响 ${stats.mineKills})` : ""}` : "0") : "-"}
+                      </td>
                       <td>{stats?.invalidActions ?? "-"}</td>
                       <td>{stats?.strikes ?? "-"}</td>
                       <td>{fmtMs(stats?.avgDecisionMs)}</td>

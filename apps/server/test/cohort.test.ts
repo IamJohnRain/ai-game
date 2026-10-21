@@ -146,7 +146,7 @@ test("批次：混合回合数 + 规则变体 + 标尺对手 → 评级/矩阵/�
     const cohortMatches = ctx.store.cohortMatchRows(launched.cohortId);
     assert.equal(cohortMatches.length, (5 * 4 / 2) * 1 * 3, "C(5,2)×gamesPerPair×legs");
     const scoutMatch = cohortMatches.find((m) => m.legIndex === 2)!;
-    assert.equal(ctx.store.getMatch(scoutMatch.matchId)!.rulesetVersion, "1.1-scout");
+    assert.equal(ctx.store.getMatch(scoutMatch.matchId)!.rulesetVersion, "1.2-scout");
     // 混合回合数真的生效：回放里的回合数不超过该 leg 的 maxRounds
     for (const m of cohortMatches.slice(0, 3)) {
       const replay = ctx.store.getReplay(m.matchId)!;

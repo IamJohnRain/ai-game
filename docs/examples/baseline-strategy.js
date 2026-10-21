@@ -12,11 +12,19 @@
 const META = {
   name: "Baseline-玄武",
   style: "mission-planner",
-  note: "任务制：锁定 补给→采集→提交 的循环；优先中央高收益资源点，采空即换点，低弹必补弹",
+  note: "任务制：锁定 补给→采集→提交 的循环；优先中央高收益资源点，采空即换点，低弹必补弹；残血贴脸先举盾、关键路口顺手布雷",
 };
 
 // 是否允许为高收益冒险去中央资源点（改成 false 就退化为"只守近端资源点"的保守流派）
 const ALLOW_CENTER = true;
+
+// 布雷冷却（轮）：地雷会把自己也锁在格子外，布太密等于自断路线；8 轮一枚是"顺手埋"的节奏。
+// 想完全不用地雷（纯经济流派）把它调成大数即可；想更凶就调小、并把触发距离放宽到 3。
+const MINE_COOLDOWN = 8;
+let lastMineRound = -99;
+
+// 举盾冷却（轮）：防御要花掉整回行动力，一路龟缩等于把地图白送对手；6 轮上限内举一次
+const DEFEND_COOLDOWN = 6;
 
 // ---------- 模块级记忆（整场比赛持续存在）----------
 let SEAT = 1;
@@ -28,7 +36,14 @@ let ALL_FUEL = [];          // 全部加油点
 let ALL_DEPOT = [];         // 全部弹药补给点
 let ALL_DEPOSIT = [];       // 全部提交点
 const SEEN = {};            // seat -> {x, y, hp, round}
+// 自己埋过的雷：引擎不给"雷在哪"的字段（地雷对所有人不可见，连自己也是），
+// 所以只有靠自己记 —— 这是脚本自己的备忘，踩上去之前必须先想起它。
+const OWN_MINES = [];       // [{x, y}]
 let mission = null;         // { kind: "fuel"|"ammo"|"node"|"deposit", x, y, id }
+
+// 上一轮我是不是挨了炮、上一次举盾是哪一轮（决定"该不该举盾"：只在真的被打、或对手已经贴到身边时举）
+let lastHitRound = -99;
+let lastDefendRound = -99;
 
 // ---------- 小工具 ----------
 function cheb(a, b) { return API.chebyshev(a, b); }
@@ -42,10 +57,12 @@ function pickNearest(list, from) {
   return best;
 }
 
-// 在候选资源点里挑"近且还有货"的；看不见的点按"可能还有货"估算，已确认采空的直接跳过
+// 在候选资源点里挑"近且还有货"的；看不见的点按"可能还有货"估算，已确认采空的直接跳过。
+// 自己埋过雷的点也跳过：地雷不分敌我，埋了就谁也进不去，别把它排成任务目标。
 function pickStocked(nodes, state, from) {
   let best = null, bestScore = -1e9;
   for (const n of nodes) {
+    if (ownMineAt(n.x, n.y)) continue;
     const view = state.resourceNodes.filter(function (r) { return r.id === n.id; })[0];
     if (view && view.remaining === 0) continue;
     const remain = view && view.remaining !== null ? view.remaining : 3;
@@ -88,21 +105,86 @@ function isOccupied(x, y) {
   return false;
 }
 
-// 沿路径走最多 budget 步；逐步校验地形与占位，绝不发出注定无效的 move
+// 这一格是不是"开阔地"（四邻里至少 3 个能走）：地雷不分敌我，**在自己也走的窄路上布雷 = 把自己也堵死**。
+// 走廊/独木桥上只认地形，脚本算不出"对手会不会来踩"，但算得出"我以后还能不能绕过去"。
+function openGround(x, y) {
+  let open = 0;
+  const ns = API.neighbors(x, y);
+  for (let i = 0; i < ns.length; i++) {
+    if (API.isPassable(ns[i].x, ns[i].y, { ignoreUnits: true })) open++;
+  }
+  return open >= 3;
+}
+
+// 自己记下的雷：地雷不分敌我，忘了它就会自己把自己报销
+function ownMineAt(x, y) {
+  for (let i = 0; i < OWN_MINES.length; i++) {
+    if (OWN_MINES[i].x === x && OWN_MINES[i].y === y) return true;
+  }
+  return false;
+}
+
+// 沿路径走最多 budget 步；逐步校验地形与占位，绝不发出注定无效的 move。
+// 遇到"这一步走不了"（墙/水、被别的车占住、或是我自己埋的雷）不会原地放弃：
+// 先在四邻里挑一个能走、没占、没雷、且离目标更近的格子绕一步，然后重新算路。
+// 这一条对地雷尤其关键：地雷会把自己也挡在格子外，绕不过去就等于自断路线。
+function findPath(from, target) {
+  try { return API.pathFind(from, target, { avoidUnits: true, maxNodes: 4000 }); } catch (e) { return null; }
+}
+
+function stepOk(from, dir) {
+  const n = API.step(from, dir);
+  if (n.x < 0 || n.y < 0 || n.x >= MAP.width || n.y >= MAP.height) return null;
+  if (!API.isPassable(n.x, n.y, { ignoreUnits: true })) return null;
+  if (isOccupied(n.x, n.y)) return null;
+  if (ownMineAt(n.x, n.y)) return null;
+  return n;
+}
+
+/**
+ * 绕一步：四邻里"能走、没占、没自己的雷"的那个。
+ * 优先选离目标更近的；全都一样近时允许"横着绕一步"（同一行/列侧移），并避开刚走过来的那格。
+ * 只认"更近"是不够的：在开阔地里横着走一格离目标的切比雪夫距离不变，会被误判成无路可走（实测会把车卡死）。
+ */
+function detourAround(from, target, cameFrom) {
+  let best = null, bestD = cheb(from, target);
+  const ns = API.neighbors(from.x, from.y);
+  for (let i = 0; i < ns.length; i++) {
+    const n = ns[i];
+    if (isOccupied(n.x, n.y) || ownMineAt(n.x, n.y)) continue;
+    if (cameFrom && n.x === cameFrom.x && n.y === cameFrom.y) continue;
+    if (!API.isPassable(n.x, n.y, { ignoreUnits: true })) continue;
+    const d = cheb(n, target);
+    if (d < bestD) { bestD = d; best = n; }
+    else if (d === bestD && !best) best = n;
+  }
+  return best;
+}
+
 function moveToward(from, target, budget) {
   const acts = [];
   if (!from || !target || budget <= 0) return { acts: acts, pos: from };
-  let path = null;
-  try { path = API.pathFind(from, target, { avoidUnits: true, maxNodes: 4000 }); } catch (e) { path = null; }
-  if (!path || path.length === 0) return { acts: acts, pos: from };
   let p = { x: from.x, y: from.y };
-  for (let i = 0; i < path.length && acts.length < budget; i++) {
-    const n = API.step(p, path[i]);
-    if (n.x < 0 || n.y < 0 || n.x >= MAP.width || n.y >= MAP.height) break;
-    if (!API.isPassable(n.x, n.y, { ignoreUnits: true })) break;
-    if (isOccupied(n.x, n.y)) break;
+  let path = findPath(p, target);
+  let i = 0, detours = 0;
+  let cameFrom = null;
+  while (path && i < path.length && acts.length < budget) {
+    const n = stepOk(p, path[i]);
+    if (!n) {
+      if (detours >= 2) break; // 连着绕不过去就别再折腾（可能真的被堵死了）
+      const alt = detourAround(p, target, cameFrom);
+      if (!alt) break;
+      detours++;
+      cameFrom = p;
+      acts.push({ type: "move", dir: alt.dir });
+      p = { x: alt.x, y: alt.y };
+      path = findPath(p, target); i = 0;
+      continue;
+    }
+    cameFrom = p;
     acts.push({ type: "move", dir: path[i] });
     p = n;
+    i++;
   }
   return { acts: acts, pos: p };
 }
@@ -112,6 +194,16 @@ function updateMemory(state) {
   for (const e of (state.enemies || [])) SEEN[e.seat] = { x: e.pos.x, y: e.pos.y, hp: e.hp, round: state.round };
   for (const e of (state.lastKnownEnemies || [])) {
     if (!SEEN[e.seat]) SEEN[e.seat] = { x: e.pos.x, y: e.pos.y, hp: e.hp, round: e.seenRound };
+  }
+  // 自己埋的雷炸了（公告里有死因）：从备忘里划掉，别把已经空掉的格子当成禁区
+  for (const e of (state.events || [])) {
+    if (e.type === "death" && e.cause === "mine") {
+      for (let i = OWN_MINES.length - 1; i >= 0; i--) {
+        if (OWN_MINES[i].x === e.pos.x && OWN_MINES[i].y === e.pos.y) OWN_MINES.splice(i, 1);
+      }
+    }
+    // 挨炮的记录：举盾的判据（damage > 0 ≈ 没被防御挡下）
+    if (e.type === "hit" && e.targetSeat === SEAT && e.damage > 0) lastHitRound = state.round;
   }
 }
 
@@ -188,6 +280,19 @@ function onTurn(state) {
     const acts = [];
     let ap = RULES.apPerTurn;
     const pos = { x: self.pos.x, y: self.pos.y };
+    const enemy = nearestVisibleEnemy(state);
+
+    // 0) 一炮就能打死我，而且对手真的在开枪（刚刚挨过炮 / 已经贴到我身边）：举盾。
+    //    防御占满整回行动力（必须是本回合唯一的动作），换来的是一炮打不穿的两轮 ——
+    //    比阵亡（扣分 + 掉货 + 停机 3 回合）便宜得多，还有冷却防止一路龟缩把收入耗光。
+    //    只挡炮弹：地雷照样清空血量，所以这条判断挡不住踩雷。
+    if (self.ammoMax > 0 && self.defendLeft === 0 && self.hp <= RULES.shellDamage
+      && state.round - lastDefendRound >= DEFEND_COOLDOWN
+      && enemy && enemy.distance <= 6 && API.hasLOS(pos, enemy.pos)
+      && (state.round - lastHitRound <= 1 || enemy.distance <= 2)) {
+      lastDefendRound = state.round;
+      return [{ type: "defend" }];
+    }
 
     // 1) 站在设施上：把能做的补给/提交尽量做满（2 点行动力别浪费在同一格的来回上）
     if (ap > 0 && self.cargo > 0 && API.isDeposit(pos.x, pos.y)) {
@@ -203,15 +308,22 @@ function onTurn(state) {
       acts.push({ type: "refuel" }); ap -= 1; self.fuel += add;
       if (mission && mission.kind === "fuel") mission = null;
     }
+    // 弹药点同时供"弹"与"雷"：一次 loadAmmo 两样一起补，扣分口径与引擎一致（先弹后雷、库存有限先保弹）
     const ammoStop = ammoStopOf(self);
-    while (ap > 0 && API.isAmmo(pos.x, pos.y) && self.ammo <= ammoStop && self.ammoMax > 0) {
+    while (ap > 0 && API.isAmmo(pos.x, pos.y) && self.ammoMax > 0) {
       const depotView = state.ammoDepots.filter(function (q) { return q.x === pos.x && q.y === pos.y; })[0];
       const stock = depotView ? depotView.remaining : null;
       if (stock !== null && stock <= 0) break; // 空库存：别刷无效动作，等回充
-      const add = Math.min(RULES.loadAmmoPerAction, self.ammoMax - self.ammo, stock === null ? Infinity : stock);
-      if (add <= 0) break;
-      if (depotView && depotView.remaining !== null) depotView.remaining = Math.max(0, depotView.remaining - add);
-      acts.push({ type: "loadAmmo" }); ap -= 1; self.ammo += add;
+      const wantAmmo = self.ammo <= ammoStop ? Math.min(RULES.loadAmmoPerAction, self.ammoMax - self.ammo) : 0;
+      const wantMines = self.mines < self.minesMax ? self.minesMax - self.mines : 0;
+      if (wantAmmo <= 0 && wantMines <= 0) break;
+      const gotAmmo = stock === null ? wantAmmo : Math.min(wantAmmo, stock);
+      const left = stock === null ? null : stock - gotAmmo;
+      const gotMines = left === null ? wantMines : Math.min(wantMines, left);
+      if (gotAmmo <= 0 && gotMines <= 0) break;
+      if (depotView && depotView.remaining !== null) depotView.remaining = Math.max(0, (left === null ? stock : left) - gotMines);
+      acts.push({ type: "loadAmmo" }); ap -= 1;
+      self.ammo += gotAmmo; self.mines += gotMines;
       if (mission && mission.kind === "ammo") mission = null;
     }
     while (ap > 0 && API.isResource(pos.x, pos.y) && self.cargo < self.cargoMax) {
@@ -226,13 +338,31 @@ function onTurn(state) {
     }
 
     // 2) 火力：近距离 / 对方已残 / 对方载着货 都值得打；远距离对满血敌人只在弹药宽裕时打
-    const enemy = nearestVisibleEnemy(state);
     if (ap > 0 && enemy && self.ammo >= 1 && self.hp > 20
       && enemy.distance <= RULES.fireRange && API.hasLOS(pos, enemy.pos)) {
       const worthIt = enemy.distance <= 4 || enemy.hp <= 60 || enemy.cargo > 0 || self.ammo >= 9;
       if (worthIt) {
         acts.push({ type: "fire", target: { x: enemy.pos.x, y: enemy.pos.y } });
         ap -= 1;
+      }
+    }
+
+// 2.5) 被人贴到身边 → 在脚下留一颗雷再撤：对手八成是踩着这一格追上来的。
+    //      只布在**普通格**上（资源点/补给点/提交点/出生点是我自己还要反复用的格子，埋了自己也走不了），
+    //      并且带冷却 —— 地雷不分敌我，布太密等于自断路线、也会把整张图打成互相拆台的雷区。
+    //      地雷对所有人不可见（连自己也没有查询接口），所以埋完必须自己记进 OWN_MINES，
+    //      否则下次巡逻路过就把自己报销了。
+    if (ap > 0 && self.ammoMax > 0 && self.mines > 0 && !ownMineAt(pos.x, pos.y)
+      && state.round - lastMineRound >= MINE_COOLDOWN
+      && openGround(pos.x, pos.y)
+      && enemy && enemy.distance <= 2) {
+      const onFacility = API.isResource(pos.x, pos.y) || API.isDeposit(pos.x, pos.y)
+        || API.isAmmo(pos.x, pos.y) || API.isFuel(pos.x, pos.y) || API.isSpawn(pos.x, pos.y);
+      if (!onFacility) {
+        acts.push({ type: "deployMine" }); ap -= 1;
+        self.mines -= 1;
+        OWN_MINES.push({ x: pos.x, y: pos.y });
+        lastMineRound = state.round;
       }
     }
 

@@ -1,7 +1,7 @@
 // packages/engine/src/match.ts —— 确定性回合制引擎（规则权威：docs/02-游戏规则-v1.md）
 import {
-  ActionSchema, API_VERSION, SCHEMA_VERSION, chebyshev, damageOnHit, DIRS, effectiveRules, hitChance, step,
-  type Action, type Ctx, type GameMap, type InvalidReason, type MatchEvent, type MatchResult,
+  ActionSchema, API_VERSION, SCHEMA_VERSION, actionApCost, chebyshev, damageOnHit, DIRS, effectiveRules, hitChance, step,
+  type Action, type Ctx, type DeathCause, type GameMap, type InvalidReason, type MatchEvent, type MatchResult,
   type PlayerStats, type Pos, type Ruleset, type ScoreBreakdown, type State, type StateEvent,
 } from "@ai-game/protocol";
 import { buildTerrain, type Terrain } from "./terrain.ts";
@@ -40,15 +40,21 @@ interface SupplyState {
 interface Tank {
   seat: number; name: string; scriptHash: string;
   pos: Pos; spawn: Pos;
-  hp: number; ammo: number; fuel: number; cargo: number;
+  hp: number; ammo: number; fuel: number; cargo: number; mines: number;
+  /** 剩余防御轮数（0 = 未防御）：> 0 时炮弹伤害被完全挡下；对方脚本看不到这个值 */
+  defendLeft: number;
   score: number; alive: boolean; disabledTurns: number;
   moves: number; shotsFired: number; hits: number; damageDealt: number;
   kills: number; deaths: number; deposits: number; unitsDeposited: number; unitsCollected: number;
   ammoLoaded: number; fuelLoaded: number; emergencyMoves: number;
+  minesDeployed: number; mineKills: number;
   invalidActions: number; strikes: number; disqualified: boolean; disqualifiedKind?: string;
   turnsTaken: number; decisionMs: number; maxDecisionMs: number;
   breakdown: ScoreBreakdown;
 }
+
+/** 场上的一枚地雷：位置 + 埋它的人。同一格可以叠放多枚（按下标顺序触发最老的一枚）。 */
+interface MineState { id: number; x: number; y: number; owner: number }
 
 const STRIKE_LIMIT = 3;
 
@@ -73,10 +79,12 @@ export function runMatch(input: RunMatchInput): MatchResult {
     tanks.set(s.seat, {
       seat: s.seat, name: s.name, scriptHash: s.scriptHash, pos: { ...spawn }, spawn: { ...spawn },
       hp: rules.initial.hp, ammo: rules.initial.ammo, fuel: rules.initial.fuel, cargo: rules.initial.cargo,
+      mines: rules.initial.mines, defendLeft: 0,
       score: 0, alive: true, disabledTurns: 0,
       moves: 0, shotsFired: 0, hits: 0, damageDealt: 0,
       kills: 0, deaths: 0, deposits: 0, unitsDeposited: 0, unitsCollected: 0,
       ammoLoaded: 0, fuelLoaded: 0, emergencyMoves: 0,
+      minesDeployed: 0, mineKills: 0,
       invalidActions: 0, strikes: 0, disqualified: false,
       turnsTaken: 0, decisionMs: 0, maxDecisionMs: 0, breakdown: emptyBreakdown(),
     });
@@ -103,6 +111,12 @@ export function runMatch(input: RunMatchInput): MatchResult {
   const fuelAt = new Map<number, number>();
   ammo.forEach((p, i) => { if (!ammoAt.has(terrain.index(p.x, p.y))) ammoAt.set(terrain.index(p.x, p.y), i); });
   fuel.forEach((p, i) => { if (!fuelAt.has(terrain.index(p.x, p.y))) fuelAt.set(terrain.index(p.x, p.y), i); });
+
+  // 地雷：只有引擎自己知道埋在哪（不写进任何脚本可见的状态）。mineSeq 是全局自增的雷编号，
+  // 事件流靠它把"埋"与"踩响"对应起来（同一格叠放多枚时按埋下的先后顺序触发）。
+  const minesById = new Map<number, MineState>();
+  const minesAtTile = new Map<number, number[]>();
+  let mineSeq = 0;
 
   // 每个座位的"自上次行动以来的可知事件"队列
   const pending = new Map<number, StateEvent[]>(seatList.map((s) => [s, []]));
@@ -184,6 +198,7 @@ export function runMatch(input: RunMatchInput): MatchResult {
         tank.alive = true;
         tank.hp = rules.respawn.hp; tank.ammo = rules.respawn.ammo;
         tank.fuel = rules.respawn.fuel; tank.cargo = rules.respawn.cargo;
+        tank.mines = rules.respawn.mines;
         tank.pos = { ...tank.spawn };
         emit({ t: "respawn", seat, pos: { ...tank.pos } });
         pushToAll(pending, seatList, { type: "respawn", seat, pos: { ...tank.pos }, round });
@@ -234,12 +249,22 @@ export function runMatch(input: RunMatchInput): MatchResult {
         pushTo(pending, seat, { type: "invalid_action", action: { extra: actions.length - maxActions }, reason: "TOO_MANY_ACTIONS", round });
         actions = actions.slice(0, maxActions);
       }
+      // AP 是真扣的：wait 免费、defend 占满一整回合、其余各 1 点。
+      // 现状下（除 defend 外的动作都只要 1 点，而动作条数已经卡在 apPerTurn）旧脚本的行为一模一样，
+      // 这条只是让"防御必须占用整个回合"成为引擎级事实，而不是靠脚本文档自觉。
+      let apLeft = rules.apPerTurn;
       for (let ai = 0; ai < actions.length; ai++) {
         const parsed = ActionSchema.safeParse(actions[ai]);
         if (!parsed.success) {
           invalid(tank, actions[ai], "BAD_SHAPE", round, seat);
           continue;
         }
+        const cost = actionApCost(parsed.data, rules);
+        if (cost > apLeft) {
+          invalid(tank, parsed.data, "NO_AP", round, seat);
+          continue;
+        }
+        apLeft -= cost;
         applyAction(tank, parsed.data, round, seat, ai);
       }
     }
@@ -262,6 +287,10 @@ export function runMatch(input: RunMatchInput): MatchResult {
     };
     regenSupply(ammo, "ammo");
     regenSupply(fuel, "fuel");
+    // 回合末：防御计时走一格（在 R 轮发起 → R 与 R+1 两轮都受保护，R+2 起恢复常人身）
+    for (const tank of tanks.values()) {
+      if (tank.defendLeft > 0) tank.defendLeft -= 1;
+    }
   }
 
   const ranking = finishRanking();
@@ -340,6 +369,7 @@ export function runMatch(input: RunMatchInput): MatchResult {
       self: {
         seat, pos: { ...me.pos }, hp: me.hp, hpMax: rules.hpMax, ammo: me.ammo, ammoMax: rules.ammoMax,
         fuel: me.fuel, fuelMax: rules.fuelMax, cargo: me.cargo, cargoMax: rules.cargoMax,
+        mines: me.mines, minesMax: rules.mineMax, defendLeft: me.defendLeft,
         score: me.score, alive: true, disabledTurns: 0, kills: me.kills, deaths: me.deaths,
         spawn: { ...me.spawn },
       },
@@ -397,6 +427,8 @@ export function runMatch(input: RunMatchInput): MatchResult {
         }
         tank.moves += 1;
         emit({ t: "move", seat, from, to: { ...to }, fuelAfter: tank.fuel, ...(emergency ? { emergency: true } : {}) });
+        // 落脚点上可能有雷（自己埋的也算）：移动已完成，踩上去就炸；复活/开局"出现"在格子上不触发
+        triggerMine(tank, to, round);
         return;
       }
       case "fire": {
@@ -429,13 +461,19 @@ export function runMatch(input: RunMatchInput): MatchResult {
           return;
         }
         const dmg = damageOnHit(rules, victimInForest);
-        victim.hp -= dmg;
+        // 防御：炮弹照样命中、照样消耗弹药，但伤害被完全挡下（脚本侧只能从 damage=0 推测，防御状态本身不暴露）
+        const blocked = victim.defendLeft > 0;
+        const dealt = blocked ? 0 : dmg;
+        victim.hp -= dealt;
         tank.hits += 1;
-        tank.damageDealt += dmg;
-        emit({ t: "fire", seat, target: { ...target }, hit: true, damage: dmg, targetSeat: victim.seat, ammoAfter: tank.ammo });
-        pushTo(pending, seat, { type: "hit", by: seat, targetSeat: victim.seat, damage: dmg, pos: { ...target }, round });
-        pushTo(pending, victim.seat, { type: "hit", by: seat, targetSeat: victim.seat, damage: dmg, pos: { ...target }, round });
-        if (victim.hp <= 0) killTank(victim, seat, round);
+        tank.damageDealt += dealt;
+        emit({
+          t: "fire", seat, target: { ...target }, hit: true, damage: dealt, targetSeat: victim.seat, ammoAfter: tank.ammo,
+          ...(blocked ? { blocked: true } : {}),
+        });
+        pushTo(pending, seat, { type: "hit", by: seat, targetSeat: victim.seat, damage: dealt, pos: { ...target }, round });
+        pushTo(pending, victim.seat, { type: "hit", by: seat, targetSeat: victim.seat, damage: dealt, pos: { ...target }, round });
+        if (victim.hp <= 0) killTank(victim, seat, round, "fire");
         return;
       }
       case "collect": {
@@ -469,23 +507,52 @@ export function runMatch(input: RunMatchInput): MatchResult {
       case "loadAmmo": {
         const si = ammoAt.get(t.index(tank.pos.x, tank.pos.y));
         if (si === undefined) return invalid(tank, action, "NOT_ON_AMMO", round, seat);
-        if (tank.ammo >= rules.ammoMax) return invalid(tank, action, "AMMO_FULL", round, seat);
+        // 一次补给把"弹"和"雷"一起补满：弹药受 loadAmmoPerAction 限制、地雷受 mineMax 限制
+        if (tank.ammo >= rules.ammoMax && tank.mines >= rules.mineMax) return invalid(tank, action, "AMMO_FULL", round, seat);
         const depot = ammo[si]!;
         const want = Math.min(rules.loadAmmoPerAction, rules.ammoMax - tank.ammo);
         // 有库存的补给点会被拿空；无限供给的地图维持原样
         const n = depot.remaining === null ? want : Math.min(want, depot.remaining);
-        if (n <= 0) return invalid(tank, action, "AMMO_EMPTY", round, seat);
-        if (depot.remaining !== null) depot.remaining -= n;
+        // 库存有限时先保弹药，剩下的余量才轮到地雷（与地雷一起，一次补给把弹和雷都补满）
+        const stockLeft = depot.remaining === null ? null : depot.remaining - n;
+        const wantMines = rules.mineMax - tank.mines;
+        const m = wantMines <= 0 ? 0 : (stockLeft === null ? wantMines : Math.min(wantMines, stockLeft));
+        if (n <= 0 && m <= 0) return invalid(tank, action, "AMMO_EMPTY", round, seat);
+        if (depot.remaining !== null) depot.remaining -= n + m;
         const cost = n * rules.ammoPrice;
         tank.ammo += n;
+        tank.mines += m; // 地雷不额外收钱：代价是"跑一趟"与"占用随身位"，不是分数
         tank.score -= cost;
         tank.breakdown.ammo -= cost;
         tank.ammoLoaded += n;
         emit({
-          t: "load_ammo", seat, rounds: n, scoreDelta: -cost, ammoAfter: tank.ammo, scoreAfter: tank.score,
+          t: "load_ammo", seat, rounds: n, mines: m, minesAfter: tank.mines,
+          scoreDelta: 0 - cost, ammoAfter: tank.ammo, scoreAfter: tank.score,
           ...(depot.remaining === null ? {} : { depotIndex: si, depotRemainingAfter: depot.remaining }),
         });
         pushTo(pending, seat, { type: "load_ammo", seat, rounds: n, scoreDelta: -cost, round });
+        return;
+      }
+      case "defend": {
+        // 停止一个回合：AP 已在动作循环里扣满，这里只负责把护盾立起来（立即生效，含本轮）
+        tank.defendLeft = rules.defendRounds;
+        emit({ t: "defend", seat, rounds: rules.defendRounds });
+        // 这个事件只发给自己：对方脚本看不出你在防御
+        pushTo(pending, seat, { type: "defend", seat, rounds: rules.defendRounds, round });
+        return;
+      }
+      case "deployMine": {
+        if (tank.mines < 1) return invalid(tank, action, "NO_MINE", round, seat);
+        const at = { ...tank.pos };
+        tank.mines -= 1;
+        tank.minesDeployed += 1;
+        const id = ++mineSeq;
+        minesById.set(id, { id, x: at.x, y: at.y, owner: seat });
+        const key = t.index(at.x, at.y);
+        const list = minesAtTile.get(key);
+        if (list) list.push(id); else minesAtTile.set(key, [id]);
+        // 布雷对所有人不可见（连自己都没有"雷在哪"的字段）：事件流只给观战与回放看
+        emit({ t: "deploy_mine", seat, mineId: id, x: at.x, y: at.y, minesAfter: tank.mines });
         return;
       }
       case "refuel": {
@@ -515,10 +582,29 @@ export function runMatch(input: RunMatchInput): MatchResult {
     }
   }
 
-  function killTank(victim: Tank, killerSeat: number | null, round: number): void {
+  /**
+   * 踩雷：触发该格上埋得最老的一枚（同一格可能叠了好几枚），这枚雷就此消耗。
+   * 地雷"清空血量"不经过伤害结算，所以**防御状态也挡不住**（防御只挡炮弹）——这是刻意定的规则。
+   */
+  function triggerMine(tank: Tank, at: Pos, round: number): void {
+    const key = terrain.index(at.x, at.y);
+    const list = minesAtTile.get(key);
+    if (!list || list.length === 0) return;
+    const mineId = list.shift()!;
+    if (list.length === 0) minesAtTile.delete(key);
+    const mine = minesById.get(mineId);
+    minesById.delete(mineId);
+    if (!mine) return;
+    emit({ t: "mine_trigger", seat: tank.seat, mineId, x: at.x, y: at.y, owner: mine.owner });
+    // 自己踩自己的雷不算"击杀"（killerSeat = null），也就没有击杀奖励
+    killTank(tank, mine.owner === tank.seat ? null : mine.owner, round, "mine");
+  }
+
+  function killTank(victim: Tank, killerSeat: number | null, round: number, cause: DeathCause = "fire"): void {
     victim.alive = false;
     victim.hp = 0;
     victim.cargo = 0; // 载货全部损失
+    victim.defendLeft = 0; // 防御随车体一起报废，复活后是"裸车"
     victim.deaths += 1;
     victim.disabledTurns = rules.respawnRounds;
     victim.score -= rules.deathPenalty;
@@ -526,6 +612,7 @@ export function runMatch(input: RunMatchInput): MatchResult {
     const killer = killerSeat !== null ? tanks.get(killerSeat) ?? null : null;
     if (killer && killer.seat !== victim.seat) {
       killer.kills += 1;
+      if (cause === "mine") killer.mineKills += 1;
       if (rules.killReward > 0) {
         killer.score += rules.killReward;
         killer.breakdown.kill += rules.killReward;
@@ -533,11 +620,11 @@ export function runMatch(input: RunMatchInput): MatchResult {
     }
     emit({
       t: "death", seat: victim.seat, killerSeat: killer ? killer.seat : null, pos: { ...victim.pos },
-      scoreDelta: -rules.deathPenalty, scoreAfter: victim.score,
+      scoreDelta: -rules.deathPenalty, scoreAfter: victim.score, cause,
     });
     pushToAll(pending, seatList, {
       type: "death", seat: victim.seat, killerSeat: killer ? killer.seat : null,
-      pos: { ...victim.pos }, round,
+      pos: { ...victim.pos }, round, cause,
     });
   }
 
@@ -550,6 +637,7 @@ export function runMatch(input: RunMatchInput): MatchResult {
         damageDealt: t.damageDealt, kills: t.kills, deaths: t.deaths, deposits: t.deposits,
         unitsDeposited: t.unitsDeposited, unitsCollected: t.unitsCollected,
         ammoLoaded: t.ammoLoaded, fuelLoaded: t.fuelLoaded, emergencyMoves: t.emergencyMoves,
+        minesDeployed: t.minesDeployed, mineKills: t.mineKills,
         invalidActions: t.invalidActions, strikes: t.strikes, disqualified: t.disqualified,
         avgDecisionMs: t.turnsTaken > 0 ? Math.round((t.decisionMs / t.turnsTaken) * 1000) / 1000 : 0,
         maxDecisionMs: Math.round(t.maxDecisionMs * 1000) / 1000,

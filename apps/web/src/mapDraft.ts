@@ -45,11 +45,12 @@ export interface MapDraft {
   tuning: MapTuning | null;
 }
 
-/** 开启"车辆参数"时的默认值：载弹 5（省着打）、载货与血量沿用规则 */
+/** 开启"车辆参数"时的默认值：载弹 5（省着打）、地雷 2（规则上限），载货与血量沿用规则 */
 export const DEFAULT_TUNING: Required<MapTuning> = {
   hpMax: DEFAULT_RULESET.hpMax,
   ammoMax: 5,
   cargoMax: DEFAULT_RULESET.cargoMax,
+  mineMax: DEFAULT_RULESET.mineMax,
 };
 
 export const TERRAIN_CHARS: TerrainChar[] = [".", "#", "~", "f"];

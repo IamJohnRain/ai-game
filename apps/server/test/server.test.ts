@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { DEFAULT_MAP_1V1, DEFAULT_RULESET } from "@ai-game/protocol";
+import { DEFAULT_MAP_1V1, DEFAULT_RULESET, RULESET_VERSION } from "@ai-game/protocol";
 import { SCRIPT_PROTOCOL_VERSION } from "@ai-game/prompt";
 import { loadConfig, type ServerConfig } from "../src/config.ts";
 import { Store } from "../src/store.ts";
@@ -106,7 +106,7 @@ test("健康检查、地图、规则接口", async () => {
     assert.deepEqual(health.builtinMaps.sort(), ["arena-01", "duel-01"]);
     assert.equal(health.defaultMap1v1, DEFAULT_MAP_1V1);
     assert.equal(health.scriptProtocolVersion, SCRIPT_PROTOCOL_VERSION);
-    assert.equal(health.rulesetVersion, "1.1");
+    assert.equal(health.rulesetVersion, RULESET_VERSION);
     // 模型接入相关的字段不该再出现在健康检查里
     assert.equal(health.presets, undefined);
 
@@ -487,6 +487,6 @@ test("对局查询接口的边界", async () => {
     assert.equal(noMap.statusCode, 404);
     const noRules = await ctx.req({ method: "GET", url: "/api/rulesets/9.9" });
     assert.equal(noRules.statusCode, 404);
-    assert.equal(DEFAULT_RULESET.version, "1.1");
+    assert.equal(DEFAULT_RULESET.version, RULESET_VERSION);
   } finally { await ctx.close(); }
 });

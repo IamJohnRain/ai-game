@@ -7,6 +7,19 @@ export const HitChanceBandSchema = z.object({
   chance: z.number().int().min(0).max(100),
 });
 
+/**
+ * 开局 / 复活的补给量。`mines` 与弹药一样是"随身装备"：地雷不是消耗品之外的资源点物资，
+ * 开局与复活都补满，之后只能在弹药补给点续（见 §5.5 的 loadAmmo）。
+ */
+export const SupplySchema = z.object({
+  hp: z.number().int(),
+  ammo: z.number().int(),
+  fuel: z.number().int(),
+  cargo: z.number().int(),
+  mines: z.number().int().nonnegative(),
+});
+export type Supply = z.infer<typeof SupplySchema>;
+
 export const RulesetSchema = z.object({
   version: z.string(),
   // 回合
@@ -17,8 +30,8 @@ export const RulesetSchema = z.object({
   ammoMax: z.number().int().positive(),
   fuelMax: z.number().int().positive(),
   cargoMax: z.number().int().positive(),
-  initial: z.object({ hp: z.number().int(), ammo: z.number().int(), fuel: z.number().int(), cargo: z.number().int() }),
-  respawn: z.object({ hp: z.number().int(), ammo: z.number().int(), fuel: z.number().int(), cargo: z.number().int() }),
+  initial: SupplySchema,
+  respawn: SupplySchema,
   respawnRounds: z.number().int().nonnegative(),
   // 移动与经济
   moveFuelCost: z.number().int().nonnegative(),
@@ -32,6 +45,12 @@ export const RulesetSchema = z.object({
   depositScorePerUnit: z.number().int().nonnegative(),
   killReward: z.number().int().nonnegative(),
   deathPenalty: z.number().int().nonnegative(),
+  // 防御
+  /** 一次 defend 能保护自己多少轮（含发起的那一轮）：占满整回合的 AP，期间打不动 */
+  defendRounds: z.number().int().positive(),
+  // 地雷
+  /** 随身携带地雷的上限（0 = 这张图没有地雷） */
+  mineMax: z.number().int().nonnegative(),
   // 战斗
   fireRange: z.number().int().positive(),
   shellDamage: z.number().int().positive(),
@@ -49,7 +68,7 @@ export const RulesetSchema = z.object({
 });
 export type Ruleset = z.infer<typeof RulesetSchema>;
 
-export const RULESET_VERSION = "1.1";
+export const RULESET_VERSION = "1.2";
 
 export const DEFAULT_RULESET: Ruleset = {
   version: RULESET_VERSION,
@@ -59,8 +78,8 @@ export const DEFAULT_RULESET: Ruleset = {
   ammoMax: 20,
   fuelMax: 100,
   cargoMax: 5,
-  initial: { hp: 100, ammo: 6, fuel: 40, cargo: 0 },
-  respawn: { hp: 100, ammo: 6, fuel: 40, cargo: 0 },
+  initial: { hp: 100, ammo: 6, fuel: 40, cargo: 0, mines: 2 },
+  respawn: { hp: 100, ammo: 6, fuel: 40, cargo: 0, mines: 2 },
   respawnRounds: 3,
   moveFuelCost: 2,
   emergencyMoveCost: 2,
@@ -72,6 +91,8 @@ export const DEFAULT_RULESET: Ruleset = {
   depositScorePerUnit: 10,
   killReward: 20,
   deathPenalty: 20,
+  defendRounds: 2,
+  mineMax: 2,
   fireRange: 8,
   shellDamage: 20,
   forestDamageMult: 0.5,
@@ -122,11 +143,13 @@ export function effectiveRules(rules: Ruleset, map: GameMap): Ruleset {
   const hpMax = t.hpMax ?? rules.hpMax;
   const ammoMax = t.ammoMax ?? rules.ammoMax;
   const cargoMax = t.cargoMax ?? rules.cargoMax;
-  const clamp = (v: { hp: number; ammo: number; fuel: number; cargo: number }) => ({
+  const mineMax = t.mineMax ?? rules.mineMax;
+  const clamp = (v: Supply) => ({
     ...v,
     hp: Math.min(v.hp, hpMax),
     ammo: Math.min(v.ammo, ammoMax),
     cargo: Math.min(v.cargo, cargoMax),
+    mines: Math.min(v.mines, mineMax),
   });
-  return { ...rules, hpMax, ammoMax, cargoMax, initial: clamp(rules.initial), respawn: clamp(rules.respawn) };
+  return { ...rules, hpMax, ammoMax, cargoMax, mineMax, initial: clamp(rules.initial), respawn: clamp(rules.respawn) };
 }

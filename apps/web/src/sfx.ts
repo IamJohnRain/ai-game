@@ -20,7 +20,8 @@
 /** 战场音效类型。命名跟随"玩家能听到的事"，而不是引擎内部事件名。 */
 export type SfxKind =
   | "fire" | "hit" | "miss" | "collect" | "deposit" | "refuel" | "loadAmmo"
-  | "death" | "respawn" | "invalid" | "disqualified" | "tread" | "end" | "ui";
+  | "death" | "respawn" | "invalid" | "disqualified" | "tread" | "end" | "ui"
+  | "defend" | "mineDeploy" | "mineBlast";
 
 /**
  * 全部 kind（供测试遍历、也供观战页的音效开关列表使用）。
@@ -29,6 +30,7 @@ export type SfxKind =
 export const SFX_KINDS: readonly SfxKind[] = [
   "fire", "hit", "miss", "collect", "deposit", "refuel", "loadAmmo",
   "death", "respawn", "invalid", "disqualified", "tread", "end", "ui",
+  "defend", "mineDeploy", "mineBlast",
 ];
 
 /**
@@ -60,6 +62,9 @@ const SPEC_TABLE: Record<SfxKind, SfxSpec> = {
   invalid: { minIntervalMs: 150, baseGain: 0.2, desc: "无效动作：方波嗡嗡 150Hz 两声（低通削掉尖刺）" },
   disqualified: { minIntervalMs: 200, baseGain: 0.38, desc: "淘汰：下行双音（620→310Hz）" },
   tread: { minIntervalMs: 220, baseGain: 0.08, desc: "履带：极轻的低频 rumble（60ms 低通噪声，纯背景存在感）" },
+  defend: { minIntervalMs: 90, baseGain: 0.34, desc: "举盾/被弹开：三角波上扬扫频（220→660Hz）+ 带通噪声金属泛音，听感是「一层护罩合上」" },
+  mineDeploy: { minIntervalMs: 120, baseGain: 0.3, desc: "布雷：机械 click + 一记闷响落地（正弦 190→90Hz）+ 短金属尾音" },
+  mineBlast: { minIntervalMs: 120, baseGain: 0.5, desc: "触雷：高频爆裂噪声 + 长低通轰鸣（1200→60Hz）+ 泥土碎屑带通噪声" },
   end: { minIntervalMs: 500, baseGain: 0.32, desc: "比赛结束：三音上行 C5-E5-G5（523/659/784Hz 三角波）" },
   ui: { minIntervalMs: 40, baseGain: 0.18, desc: "界面点击：极短的一下（低通噪声 click）" },
 };
@@ -425,6 +430,27 @@ function renderRecipe(voice: Voice, kind: SfxKind, t0: number, scale: number): n
     case "tread": {
       // 履带：60ms 的极低通噪声；baseGain 已经压到 0.08，它是"背景存在感"，绝不能抢事件音
       return voice.noise(t0, { filter: "lowpass", from: 180, to: 120, dur: 0.06, gain: scale });
+    }
+    case "defend": {
+      // 举盾：一记短促上扬（"护罩合上"）+ 一点金属泛音；被防御弹开也走这条配方，听感正好
+      const up = voice.tone(t0, { type: "triangle", from: 220, to: 660, dur: 0.26, gain: 0.3 * scale, attack: 0.008, filter: { type: "lowpass", from: 2600 } });
+      const shimmer = voice.noise(t0, { filter: "bandpass", from: 1800, to: 900, dur: 0.2, gain: 0.14 * scale, q: 1.2, attack: 0.002 });
+      const hum = voice.tone(t0 + 0.05, { type: "sine", from: 330, dur: 0.22, gain: 0.16 * scale, attack: 0.02 });
+      return Math.max(up, shimmer, hum);
+    }
+    case "mineDeploy": {
+      // 布雷：机械 click（卡进去）+ 一记闷响（埋进土里）+ 很短的金属尾音
+      const click = voice.noise(t0, { filter: "lowpass", from: 1800, dur: 0.02, gain: 0.34 * scale, attack: 0.0008 });
+      const place = voice.tone(t0 + 0.03, { type: "sine", from: 190, to: 90, dur: 0.16, gain: 0.28 * scale, attack: 0.003 });
+      const ring = voice.tone(t0 + 0.05, { type: "triangle", from: 880, dur: 0.1, gain: 0.1 * scale, attack: 0.004 });
+      return Math.max(click, place, ring);
+    }
+    case "mineBlast": {
+      // 触雷：比"阵亡"更干脆 —— 先一声爆裂（土炸开），再是长轰鸣与碎屑（和炮击的音色区分得开）
+      const crack = voice.noise(t0, { filter: "highpass", from: 900, dur: 0.05, gain: 0.45 * scale, attack: 0.0008 });
+      const boom = voice.noise(t0, { filter: "lowpass", from: 1200, to: 60, dur: 0.7, gain: 0.5 * scale, q: 0.9 });
+      const dirt = voice.noise(t0 + 0.06, { filter: "bandpass", from: 600, to: 200, dur: 0.4, gain: 0.2 * scale, q: 0.8 });
+      return Math.max(crack, boom, dirt);
     }
     case "end": {
       // 比赛结束：C5-E5-G5 三音上行，末音拖长收尾；间隔 0.14s 让三个音能分辨（更快就糊成扫频了）
