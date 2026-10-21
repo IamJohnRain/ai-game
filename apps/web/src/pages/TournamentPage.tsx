@@ -60,6 +60,16 @@ export function TournamentPage({
   const [detail, setDetail] = useState<TournamentDetail | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  /** 删除的回执 / 失败原因：单独放一条横幅，不跟"读取列表失败"混在一起 */
+  const [listAction, setListAction] = useState<{ kind: "notice" | "error"; text: string } | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  /** 正在跑 / 批次里的轮次都不能删：按钮提前禁用并说明原因，省得用户点了才被服务端拒 */
+  const deleteBlockedReason = (t: TournamentSummary): string | null => {
+    if (t.status === "pending" || t.status === "running") return "赛事正在跑：等它跑完再删";
+    if (t.cohortId) return `这是评测批次 ${shortId(t.cohortId)} 的第 ${(t.legIndex ?? 0) + 1} 轮：到「评测批次」页删除整个批次`;
+    return null;
+  };
 
   const loadAgents = useCallback(() => {
     setAgentsError(null);
@@ -181,6 +191,33 @@ export function TournamentPage({
     }
   };
 
+  const remove = async (t: TournamentSummary) => {
+    const label = t.name || shortId(t.id);
+    const games = toCount(t.matchCount) || toCount(t.finishedMatches);
+    // 二次确认：连带删掉这一场的全部对局与回放，属于不可撤销操作
+    if (
+      !window.confirm(
+        `删除赛事「${label}」？\n\n它的 ${games} 局对局、回放、选手成绩与解说稿都会一并删除，排行榜里的这些成绩也会随之消失。\nAgent、密钥与地图不受影响。`,
+      )
+    ) {
+      return;
+    }
+    setListAction(null);
+    setDeletingId(t.id);
+    try {
+      const { deleted } = await api.deleteTournament(t.id);
+      setListAction({
+        kind: "notice",
+        text: `已删除「${label}」：${deleted.matches} 局对局、${deleted.replays} 份回放、${deleted.commentary} 份解说稿。`,
+      });
+      loadTournaments();
+    } catch (err) {
+      setListAction({ kind: "error", text: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   if (openId) {
     return (
       <TournamentDetailView
@@ -193,6 +230,13 @@ export function TournamentPage({
           setOpenId(null);
           setDetail(null);
           setDetailError(null);
+          loadTournaments();
+        }}
+        onDeleted={(text) => {
+          setOpenId(null);
+          setDetail(null);
+          setDetailError(null);
+          setListAction({ kind: "notice", text });
           loadTournaments();
         }}
         onReload={() => void loadDetail(openId)}
@@ -331,6 +375,9 @@ export function TournamentPage({
             </div>
           </Banner>
         ) : null}
+        {listAction ? (
+          <Banner tone={listAction.kind === "notice" ? "info" : "error"}>{listAction.text}</Banner>
+        ) : null}
         {tournaments === null && !listError ? <div className="hint">加载中…</div> : null}
 
         {tournaments && tournaments.length === 0 && !listError ? (
@@ -359,6 +406,11 @@ export function TournamentPage({
                   <tr key={t.id}>
                     <td>
                       {t.name || <span className="muted">（未命名）</span>}
+                      {t.cohortId ? (
+                        <Badge tone="muted" title={`评测批次 ${t.cohortId} 的第 ${(t.legIndex ?? 0) + 1} 轮`}>
+                          批次 leg
+                        </Badge>
+                      ) : null}
                       <div className="mono tiny muted">{shortId(t.id)}</div>
                     </td>
                     <td>
@@ -374,6 +426,14 @@ export function TournamentPage({
                     <td className="row-actions">
                       <button className="btn btn-sm btn-primary" onClick={() => openDetail(t.id)}>
                         查看详情
+                      </button>
+                      <button
+                        className="btn btn-sm btn-danger"
+                        onClick={() => void remove(t)}
+                        disabled={deletingId === t.id || deleteBlockedReason(t) !== null}
+                        title={deleteBlockedReason(t) ?? "删除这场赛事及其全部对局（不可撤销）"}
+                      >
+                        {deletingId === t.id ? "删除中…" : "删除"}
                       </button>
                     </td>
                   </tr>
@@ -395,6 +455,7 @@ function TournamentDetailView({
   loading,
   live,
   onBack,
+  onDeleted,
   onReload,
   onOpen,
 }: {
@@ -404,9 +465,13 @@ function TournamentDetailView({
   loading: boolean;
   live: boolean;
   onBack: () => void;
+  /** 删除成功：父组件回到列表、刷新并把"已删除 N 局"的回执挂在列表上 */
+  onDeleted: (notice: string) => void;
   onReload: () => void;
   onOpen: (page: "watch" | "replay" | "report", matchId: string) => void;
 }) {
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   // 并列名次：rank 与相邻行相同即视为平局行，用底色 + 角标标出来，避免读表时看错位次
   const tieRows = useMemo(() => {
     const set = new Set<number>();
@@ -448,6 +513,34 @@ function TournamentDetailView({
   // 进度条要做除法：后端字段缺失时退化成 0，避免 NaN 把整页渲染搞崩
   const total = toCount(t.matchCount);
   const done = toCount(t.finishedMatches);
+  // 与列表页同一套禁删理由；批次 leg 单独说一句，免得用户以为"删不了"
+  const deleteBlockedReason = live
+    ? "赛事正在跑：等它跑完再删"
+    : t.cohortId
+      ? `这是评测批次 ${shortId(t.cohortId)} 的第 ${(t.legIndex ?? 0) + 1} 轮：到「评测批次」页删除整个批次`
+      : null;
+
+  const removeSelf = async () => {
+    const label = t.name || shortId(t.id);
+    const games = toCount(t.matchCount) || toCount(t.finishedMatches);
+    if (
+      !window.confirm(
+        `删除赛事「${label}」？\n\n它的 ${games} 局对局、回放、选手成绩与解说稿都会一并删除，排行榜里的这些成绩也会随之消失。\nAgent、密钥与地图不受影响。`,
+      )
+    ) {
+      return;
+    }
+    setDeleteError(null);
+    setDeleting(true);
+    try {
+      const { deleted } = await api.deleteTournament(t.id);
+      onDeleted(`已删除「${label}」：${deleted.matches} 局对局、${deleted.replays} 份回放、${deleted.commentary} 份解说稿。`);
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   return (
     <div className="stack">
@@ -467,6 +560,14 @@ function TournamentDetailView({
           <button className="btn" onClick={onReload} disabled={loading}>
             {loading ? "刷新中…" : "刷新"}
           </button>
+          <button
+            className="btn btn-danger"
+            onClick={() => void removeSelf()}
+            disabled={deleting || deleteBlockedReason !== null}
+            title={deleteBlockedReason ?? "删除这场赛事及其全部对局（不可撤销）"}
+          >
+            {deleting ? "删除中…" : "删除赛事"}
+          </button>
           <button className="btn" onClick={onBack}>
             返回赛事列表
           </button>
@@ -474,6 +575,8 @@ function TournamentDetailView({
       </div>
 
       {error ? <Banner tone="warn">最近一次刷新失败（页面保留上一次数据）：{error}</Banner> : null}
+      {deleteError ? <Banner tone="error">删除失败：{deleteError}</Banner> : null}
+      {deleteBlockedReason ? <Banner tone="info">{deleteBlockedReason}</Banner> : null}
       {t.status === "failed" ? <Banner tone="error">赛事失败：{t.error ?? "服务端未给出原因"}</Banner> : null}
 
       <div className="detail-progress">

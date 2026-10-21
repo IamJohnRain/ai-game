@@ -421,6 +421,9 @@ export function registerExternalRoutes(app: FastifyInstance, deps: ExternalRoute
           createdAt: t.createdAt,
           ...(t.finishedAt ? { finishedAt: t.finishedAt } : {}),
           ...(t.error ? { error: t.error } : {}),
+          // 评测批次的轮次也在这张列表里：带上归属，前端才能标出「批次」并解释为什么删不了单条
+          ...(t.cohortId ? { cohortId: t.cohortId } : {}),
+          ...(t.legIndex != null ? { legIndex: t.legIndex } : {}),
         };
       }),
     };
@@ -474,6 +477,9 @@ export function registerExternalRoutes(app: FastifyInstance, deps: ExternalRoute
         createdAt: tournament.createdAt,
         ...(tournament.finishedAt ? { finishedAt: tournament.finishedAt } : {}),
         ...(tournament.error ? { error: tournament.error } : {}),
+        // 批次归属也要给：详情页据此说明"这条 leg 不能单删"，与列表页口径一致
+        ...(tournament.cohortId ? { cohortId: tournament.cohortId } : {}),
+        ...(tournament.legIndex != null ? { legIndex: tournament.legIndex } : {}),
       },
       standings,
       matches,
@@ -510,6 +516,33 @@ export function registerExternalRoutes(app: FastifyInstance, deps: ExternalRoute
     }
     reply.header("Content-Type", "text/markdown; charset=utf-8");
     return lines.join("\n");
+  });
+
+  /**
+   * 删除赛事：连带它的对局、回放、选手成绩与解说稿一起清（排行榜会随之少掉这些局）。
+   * 两道守卫——
+   *  ① 正在跑的赛事不能删：引擎还在往里写对局，删了会留下一堆孤儿行；
+   *  ② 评测批次的轮次不能单删：批次评级是按全部 leg 算的，单删一条会让评级与数据对不上（要删就删整批）。
+   */
+  app.delete("/api/tournaments/:id", async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    const tournament = store.getTournament(id);
+    if (!tournament) return fail(reply, 404, "赛事不存在");
+    const runner = deps.tournamentRunners.get(id);
+    if (runner && (runner.status === "pending" || runner.status === "running")) {
+      return fail(reply, 409, "赛事正在跑：等它跑完（通常几十秒）再删除");
+    }
+    if (tournament.cohortId) {
+      const cohort = store.getCohort(tournament.cohortId);
+      return fail(
+        reply, 409,
+        `这是评测批次「${cohort?.name ?? tournament.cohortId}」的第 ${(tournament.legIndex ?? 0) + 1} 轮：要删就到「评测批次」页删除整个批次`,
+      );
+    }
+    const deleted = store.deleteTournamentTree(id);
+    // 跑完的 runner 还会在内存里留一段时间供前端看结果；行都删了，别再让它被当成"在跑"
+    deps.tournamentRunners.delete(id);
+    return { ok: true, deleted };
   });
 
   /** 后台工具：把 zip 打成规范包（供 CLI 演示与自查；不对外暴露为公开接口） */

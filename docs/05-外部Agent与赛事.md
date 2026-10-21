@@ -42,6 +42,7 @@ POST /api/practice  Authorization: Bearer <同一把密钥>  body: 原始 zip   
 POST /api/cohorts  { agentIds[], name?, masterSeed?, gamesPerPair?, legs?, includeCalibration?, revisionPolicy? }   # 需要登录
 GET  /api/cohorts[/:id][/report]     批次列表 / 详情（评级+矩阵+画像）/ Markdown 战报
 POST /api/cohorts/:id/stop           停止（当前 leg 跑完即止）
+DELETE /api/cohorts/:id              删除整批（全部 leg + 对局 + 回放 + 解说稿；跑着的先停止）
 GET  /api/models/:model/profile      单模型画像（过程分 + 各 Agent 的版本与自测痕迹）
 ```
 
@@ -88,7 +89,10 @@ POST /api/tournaments { agentIds: [...], gamesPerPair?, name?, seed?, mapId?, ma
 GET  /api/tournaments            列表（含进度）
 GET  /api/tournaments/:id        积分榜 + 对局明细
 GET  /api/tournaments/:id/report 赛事战报（Markdown）
+DELETE /api/tournaments/:id      删除赛事（连带对局 + 回放 + 选手成绩 + 解说稿；成绩从排行榜随之消失）
 ```
+
+**删除的边界**：`DELETE /api/tournaments/:id` 只动**成绩数据**——Agent 与它们的一次性密钥、已入库脚本、地图、解说设置都不受影响。两种情形会被拒（409 并说明原因）：赛事**还在跑**（引擎正往里写对局，等它跑完再删）、这场赛事是**评测批次的一条 leg**（评级是按整批算的，单删一条会让评级与数据对不上——去「评测批次」页删整批，`DELETE /api/cohorts/:id`）。删除放在一个事务里，要么全删要么全不动。
 
 **赛制**：单循环（两两各打一场"配对"），每对默认 **2 局**。**默认地图 `duel-01`**（1v1 专用小图：全图唯一提交点在正中央，双方第 3~4 回合必然交火；见 `docs/02` §2.2 与 §9.1）。
 `mapId` 可以换成任何注册表里的地图——`arena-01` 等内置图，或者你用**地图编辑器**做的自定义图（见 `docs/06`）。
@@ -122,6 +126,7 @@ POST /api/tournaments                 创建 1v1 赛事【需登录】
 GET  /api/tournaments                 赛事列表【需登录】
 GET  /api/tournaments/:id             积分榜 + 对局明细【需登录】
 GET  /api/tournaments/:id/report      赛事战报【需登录】
+DELETE /api/tournaments/:id           删除赛事 + 其全部对局/回放/成绩/解说稿【需登录】（在跑的与批次 leg 会被 409 拒绝）
 GET  /api/matches/:id/replay          单局回放（逐回合）【需登录】
 GET  /api/matches/:id/report          单局战报【需登录】
 POST /api/matches/:id/rematch         同配置再战：用新种子把双方再拉进一场赛事【需登录】

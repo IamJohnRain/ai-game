@@ -11,6 +11,7 @@ import {
   type CohortMetricRow,
   type CohortRatingRow,
   type CohortSummary,
+  type CohortStatus,
   type CreateCohortInput,
 } from "../api";
 import { Badge, Banner, EmptyState, Section, fmtNum, fmtTime, shortId } from "../ui";
@@ -63,6 +64,9 @@ export function CohortsPage({ onOpenTournament }: { onOpenTournament: (tournamen
   const [openId, setOpenId] = useState<string | null>(null);
   const [detail, setDetail] = useState<CohortDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** 删除的回执：与 error 分开，成功删除后不该顶着一条红横幅 */
+  const [notice, setNotice] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [preset, setPreset] = useState<Preset>("default");
   const [gamesPerPair, setGamesPerPair] = useState(2);
@@ -141,6 +145,34 @@ export function CohortsPage({ onOpenTournament }: { onOpenTournament: (tournamen
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
+    }
+  };
+
+  /** 正在跑 / 待跑的批次不能删：先停止（跑完当前 leg）再删，否则引擎会继续往已删的 leg 里写对局 */
+  const remove = async (c: { id: string; name: string; status: CohortStatus; legs: number }) => {
+    const label = c.name || shortId(c.id);
+    if (
+      !window.confirm(
+        `删除批次「${label}」？\n\n它的 ${c.legs} 条 leg、全部对局、回放与解说稿都会一并删除，评级 / 胜负矩阵 / 过程分画像随批次一起消失（不可撤销）。\nAgent、密钥与地图不受影响。`,
+      )
+    ) {
+      return;
+    }
+    setError(null);
+    setNotice(null);
+    setDeletingId(c.id);
+    try {
+      const { deleted } = await api.deleteCohort(c.id);
+      if (openId === c.id) {
+        setOpenId(null);
+        setDetail(null);
+      }
+      setNotice(`已删除批次「${label}」：${deleted.legs} 条 leg、${deleted.matches} 局对局、${deleted.commentary} 份解说稿。`);
+      loadList();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -240,6 +272,7 @@ export function CohortsPage({ onOpenTournament }: { onOpenTournament: (tournamen
       </Section>
 
       <Section title="批次列表">
+        {notice ? <Banner tone="info">{notice}</Banner> : null}
         {cohorts === null ? (
           <div className="hint">加载中…</div>
         ) : cohorts.length === 0 ? (
@@ -274,9 +307,23 @@ export function CohortsPage({ onOpenTournament }: { onOpenTournament: (tournamen
                   </td>
                   <td>{c.agentCount}</td>
                   <td className="small muted">{fmtTime(c.createdAt)}</td>
-                  <td>
+                  <td className="row-actions">
                     <button className="btn btn-sm" onClick={() => setOpenId(c.id)}>
                       查看
+                    </button>
+                    <button
+                      className="btn btn-sm btn-danger"
+                      onClick={() => void remove(c)}
+                      disabled={
+                        busy || deletingId === c.id || c.status === "running" || c.status === "pending"
+                      }
+                      title={
+                        c.status === "running" || c.status === "pending"
+                          ? "批次正在跑：先点详情里的「停止」，等当前 leg 收尾后再删除"
+                          : "删除这个批次及其全部 leg 与对局（不可撤销）"
+                      }
+                    >
+                      {deletingId === c.id ? "删除中…" : "删除"}
                     </button>
                   </td>
                 </tr>
@@ -297,6 +344,18 @@ export function CohortsPage({ onOpenTournament }: { onOpenTournament: (tournamen
                 </a>
                 <button className="btn btn-sm" onClick={() => void stop()} disabled={busy || (detail.cohort.status !== "running" && detail.cohort.status !== "pending")}>
                   停止（跑完当前 leg）
+                </button>
+                <button
+                  className="btn btn-sm btn-danger"
+                  onClick={() => void remove({ ...detail.cohort, legs: detail.legs.length })}
+                  disabled={busy || deletingId === detail.cohort.id || detail.cohort.status === "running" || detail.cohort.status === "pending"}
+                  title={
+                    detail.cohort.status === "running" || detail.cohort.status === "pending"
+                      ? "批次正在跑：先「停止」再删除"
+                      : "删除这个批次及其全部 leg 与对局（不可撤销）"
+                  }
+                >
+                  {deletingId === detail.cohort.id ? "删除中…" : "删除批次"}
                 </button>
               </>
             }

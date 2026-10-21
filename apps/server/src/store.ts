@@ -72,6 +72,18 @@ export interface TournamentRow {
 
 export type CohortStatus = "pending" | "running" | "finished" | "finished_with_errors" | "failed" | "stopped";
 
+/** 级联删除赛事/批次后的统计：四张表各删了多少行（前端拿它写"已删除 N 局"） */
+export interface DeleteTreeStats {
+  matches: number;
+  replays: number;
+  players: number;
+  commentary: number;
+}
+
+export interface DeleteCohortStats extends DeleteTreeStats {
+  legs: number;
+}
+
 /** 一个评测批次：一组参赛者 + 一份 leg 计划 + 一份冻结的参赛版本快照 */
 export interface CohortRow {
   id: string; name: string; status: CohortStatus;
@@ -601,6 +613,50 @@ export class Store {
     }));
   }
 
+  /**
+   * 删除一场赛事：对局（回放、选手成绩、战报、复现键都在 matches 行里挂着）、解说稿与赛事行一起清。
+   * 只动成绩数据——Agent、密钥、地图、设置都不受影响。返回删除统计。
+   */
+  deleteTournamentTree(id: string): DeleteTreeStats {
+    return this.tx(() => {
+      const stats = this.deleteMatchTrees(this.matchIdsOfTournament(id));
+      this.db.prepare("DELETE FROM tournaments WHERE id = ?").run(id);
+      return stats;
+    });
+  }
+
+  /** 赛事下的对局 id：以 config_json 里的 tournamentId 为准（赛事一开跑就写进去了） */
+  private matchIdsOfTournament(tournamentId: string): string[] {
+    const rows = this.db.prepare("SELECT id FROM matches WHERE json_extract(config_json, '$.tournamentId') = ?")
+      .all(tournamentId) as { id: string }[];
+    return rows.map((r) => r.id);
+  }
+
+  /** 删一批对局：matches 行之外还有三张按 match_id 挂着的表（回放 / 选手 / 解说稿） */
+  private deleteMatchTrees(matchIds: string[]): DeleteTreeStats {
+    const stats: DeleteTreeStats = { matches: 0, replays: 0, players: 0, commentary: 0 };
+    for (const mid of matchIds) {
+      stats.replays += Number(this.db.prepare("DELETE FROM match_replays WHERE match_id = ?").run(mid).changes);
+      stats.players += Number(this.db.prepare("DELETE FROM match_players WHERE match_id = ?").run(mid).changes);
+      stats.commentary += Number(this.db.prepare("DELETE FROM match_commentary WHERE match_id = ?").run(mid).changes);
+      stats.matches += Number(this.db.prepare("DELETE FROM matches WHERE id = ?").run(mid).changes);
+    }
+    return stats;
+  }
+
+  /** 级联删除要么全成要么全不成：删一半赛事、留一半对局是最糟的状态 */
+  private tx<T>(fn: () => T): T {
+    this.db.exec("BEGIN");
+    try {
+      const out = fn();
+      this.db.exec("COMMIT");
+      return out;
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
   saveReport(matchId: string, markdown: string): void {
     this.db.prepare("UPDATE matches SET report_md = ? WHERE id = ?").run(markdown, matchId);
   }
@@ -744,6 +800,28 @@ export class Store {
   cohortLegs(cohortId: string): TournamentRow[] {
     const rows = this.db.prepare("SELECT * FROM tournaments WHERE cohort_id = ? ORDER BY leg_index").all(cohortId) as Record<string, unknown>[];
     return rows.map(toTournamentRow);
+  }
+
+  /**
+   * 删除一个评测批次：全部 leg（tournaments 行）、这些 leg 的对局数据与批次行一起清。
+   * 评级/矩阵/画像本来就存在批次行里，随行一起消失——这正是"删干净"的目的：
+   * 单删一条 leg 会让批次里的评级与剩下的数据对不上，所以批次只整批删。
+   */
+  deleteCohortTree(id: string): DeleteCohortStats {
+    return this.tx(() => {
+      const legs = this.cohortLegs(id);
+      const stats: DeleteTreeStats = { matches: 0, replays: 0, players: 0, commentary: 0 };
+      for (const leg of legs) {
+        const s = this.deleteMatchTrees(this.matchIdsOfTournament(leg.id));
+        stats.matches += s.matches;
+        stats.replays += s.replays;
+        stats.players += s.players;
+        stats.commentary += s.commentary;
+        this.db.prepare("DELETE FROM tournaments WHERE id = ?").run(leg.id);
+      }
+      this.db.prepare("DELETE FROM cohorts WHERE id = ?").run(id);
+      return { legs: legs.length, ...stats };
+    });
   }
 
   /** 批次里所有已完成对局的双方与比分（评级/矩阵/画像的输入） */

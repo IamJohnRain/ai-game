@@ -433,6 +433,57 @@ test("1v1 赛事：积分榜排名正确、每局可回放可看战报、未校�
   } finally { await ctx.close(); }
 });
 
+test("删除赛事：对局/回放/成绩一起清、排行榜随之少掉；正在跑的赛事被拒", async () => {
+  const ctx = await boot();
+  try {
+    const a = await register(ctx, { agentName: "甲", modelName: "model-a" });
+    const b = await register(ctx, { agentName: "乙", modelName: "model-b" });
+    const c = await register(ctx, { agentName: "丙", modelName: "model-c" });
+    for (const key of [a.key, b.key, c.key]) assert.equal((await uploadScript(ctx, key, baseline)).statusCode, 200);
+
+    // 6 局的长赛：发起后立刻删 → 引擎还在往里写，必须被拒（否则会留下半场数据）
+    const started = (await ctx.req({
+      method: "POST", url: "/api/tournaments",
+      payload: { agentIds: [a.agent.id, b.agent.id, c.agent.id], gamesPerPair: 2, maxRounds: 300, name: "待删赛事" },
+    })).json() as { tournamentId: string };
+    const runner = ctx.tournamentRunners.get(started.tournamentId);
+    assert.ok(runner, "赛事应该已经在跑");
+    assert.ok(["pending", "running"].includes(runner.status), `删除请求应落在赛事还没跑完的窗口里，实际 ${runner.status}`);
+    const rejected = await ctx.req({ method: "DELETE", url: `/api/tournaments/${started.tournamentId}` });
+    assert.equal(rejected.statusCode, 409);
+    assert.match(rejected.json().error, /正在跑/);
+
+    const finished = await waitTournament(ctx, started.tournamentId);
+    assert.equal(finished.status, "finished", finished.error ?? "");
+    const detail = (await ctx.req({ method: "GET", url: `/api/tournaments/${started.tournamentId}` })).json() as { matches: { matchId: string }[] };
+    const matchIds = detail.matches.map((m) => m.matchId);
+    assert.equal(matchIds.length, 6);
+
+    const del = await ctx.req({ method: "DELETE", url: `/api/tournaments/${started.tournamentId}` });
+    assert.equal(del.statusCode, 200, del.body);
+    const deleted = (del.json() as { deleted: { matches: number; replays: number; players: number; commentary: number } }).deleted;
+    assert.equal(deleted.matches, 6, "6 局对局都要删掉");
+    assert.equal(deleted.replays, 6, "回放跟着对局一起走");
+    assert.equal(deleted.players, 12, "每局两个座位的成绩");
+    assert.equal(deleted.commentary, 0, "没配解说时没有稿子可删");
+
+    // 赛事与它的一切都查不到了；再删一次是 404（不静默成功）
+    assert.equal((await ctx.req({ method: "GET", url: `/api/tournaments/${started.tournamentId}` })).statusCode, 404);
+    for (const mid of matchIds) {
+      assert.equal((await ctx.req({ method: "GET", url: `/api/matches/${mid}/replay` })).statusCode, 404, `${mid} 的回放应随赛事一起删`);
+    }
+    assert.equal(ctx.store.listMatches(50).length, 0);
+    assert.equal((await ctx.req({ method: "DELETE", url: `/api/tournaments/${started.tournamentId}` })).statusCode, 404);
+    const list = (await ctx.req({ method: "GET", url: "/api/tournaments" })).json().tournaments as unknown[];
+    assert.equal(list.length, 0);
+    // 排行榜是拿对局成绩聚合的：赛事删了，这三家的成绩一起消失
+    const board = (await ctx.req({ method: "GET", url: "/api/leaderboard" })).json().rows as { modelId: string }[];
+    assert.equal(board.length, 0);
+    // 删的是成绩，不是身份：Agent 与它们的一次性密钥产物（已入库脚本）都还在
+    assert.equal((await ctx.req({ method: "GET", url: "/api/agents" })).json().agents.length, 3);
+  } finally { await ctx.close(); }
+});
+
 /** 构造一个"高度可压缩"的炸弹样本：10MB 全零压成几 KB，但声明尺寸很大 */
 function bombZip(): Buffer {
   const payload = deflateRawSync(Buffer.alloc(10 * 1024 * 1024), { level: 9 });

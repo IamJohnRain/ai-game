@@ -321,6 +321,17 @@ export type TournamentSummary = {
   createdAt: string;
   finishedAt?: string;
   error?: string;
+  /** 属于评测批次时给出批次 id 与轮次：这类赛事只能整批删除（后端会拒绝单删并说明原因） */
+  cohortId?: string;
+  legIndex?: number;
+};
+
+/** 级联删除的统计：删掉的赛事/批次牵扯到几张表的多少行 */
+export type DeleteTreeStats = {
+  matches: number;
+  replays: number;
+  players: number;
+  commentary: number;
 };
 
 export type CreateTournamentInput = {
@@ -531,6 +542,9 @@ export const api = {
   getCohort: (id: string) => request<CohortDetail>("GET", `/cohorts/${encodeURIComponent(id)}`),
   createCohort: (input: CreateCohortInput) => request<CreateCohortResult>("POST", "/cohorts", input),
   stopCohort: (id: string) => request<{ ok: true; note: string }>("POST", `/cohorts/${encodeURIComponent(id)}/stop`),
+  /** 删除批次：legs + 对局 + 回放 + 解说稿一起清（跑着的批次会 409，先停止） */
+  deleteCohort: (id: string) =>
+    request<{ ok: true; deleted: DeleteTreeStats & { legs: number } }>("DELETE", `/cohorts/${encodeURIComponent(id)}`),
   getCohortReport: (id: string) => requestText(`/cohorts/${encodeURIComponent(id)}/report`),
 
   // —— 赛事（1v1 循环赛）
@@ -538,6 +552,9 @@ export const api = {
   createTournament: (input: CreateTournamentInput) =>
     request<{ tournamentId: string; seed: number; mapId: string }>("POST", "/tournaments", input),
   getTournament: (id: string) => request<TournamentDetail>("GET", `/tournaments/${encodeURIComponent(id)}`),
+  /** 删除赛事：对局 + 回放 + 选手成绩 + 解说稿一起清（跑着的赛事会 409；批次轮次要删整批） */
+  deleteTournament: (id: string) =>
+    request<{ ok: true; deleted: DeleteTreeStats }>("DELETE", `/tournaments/${encodeURIComponent(id)}`),
   getTournamentReport: (id: string) => requestText(`/tournaments/${encodeURIComponent(id)}/report`),
 
   // —— 观战解说（上帝视角解说员）：配置 + 逐场稿子

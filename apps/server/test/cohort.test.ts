@@ -323,6 +323,70 @@ test("停止批次：当前 leg 跑完即止，状态 stopped，剩余 leg 不�
   } finally { await ctx.close(); }
 });
 
+test("删除批次：legs / 对局 / 回放一起清；单删批次里的一条 leg 被拒并指路", async () => {
+  const ctx = await boot();
+  try {
+    const a = await registerAndUpload(ctx, "玄武", baseline);
+    const b = await registerAndUpload(ctx, "朱雀", homeOnly);
+    const res = await ctx.req({
+      method: "POST", url: "/api/cohorts",
+      payload: {
+        agentIds: [a, b], masterSeed: 7, gamesPerPair: 1, includeCalibration: false,
+        legs: [{ name: "L1", mapId: "duel-01", maxRounds: 20, rulesVariant: "default", seeds: 1 }],
+      },
+    });
+    assert.equal(res.statusCode, 200, res.body);
+    const id = (res.json() as { cohortId: string }).cohortId;
+    await waitCohort(ctx, id);
+
+    // 轮次在库里也是赛事行（t_/c_ 前缀都有），列表里要认得出它属于哪个批次
+    const legs = ctx.store.cohortLegs(id);
+    assert.equal(legs.length, 1);
+    const listBefore = (await ctx.req({ method: "GET", url: "/api/tournaments" })).json().tournaments as { id: string; cohortId?: string }[];
+    assert.equal(listBefore.length, 1);
+    assert.equal(listBefore[0]!.cohortId, id, "列表要带上批次归属（前端据此标「批次 leg」并禁掉单删）");
+
+    // 单删一条 leg：评级是按整批算的，删一半会让评级与数据对不上 → 409 并说明去哪儿删
+    const legDelete = await ctx.req({ method: "DELETE", url: `/api/tournaments/${legs[0]!.id}` });
+    assert.equal(legDelete.statusCode, 409);
+    assert.match(legDelete.json().error, /评测批次/);
+
+    const del = await ctx.req({ method: "DELETE", url: `/api/cohorts/${id}` });
+    assert.equal(del.statusCode, 200, del.body);
+    const deleted = (del.json() as { deleted: { legs: number; matches: number; replays: number; players: number } }).deleted;
+    assert.equal(deleted.legs, 1);
+    assert.ok(deleted.matches >= 1, "leg 里的对局要连带删掉");
+    assert.equal(deleted.replays, deleted.matches);
+    assert.equal(deleted.players, deleted.matches * 2);
+
+    assert.equal((await ctx.req({ method: "GET", url: `/api/cohorts/${id}` })).statusCode, 404);
+    assert.equal((await ctx.req({ method: "DELETE", url: `/api/cohorts/${id}` })).statusCode, 404, "再删一次是 404，不静默成功");
+    assert.equal(ctx.store.listTournaments(50).length, 0, "leg 的赛事行也要跟着清");
+    const listAfter = (await ctx.req({ method: "GET", url: "/api/tournaments" })).json().tournaments as unknown[];
+    assert.equal(listAfter.length, 0);
+    // Agent 与地图不受影响
+    assert.equal((await ctx.req({ method: "GET", url: "/api/agents" })).json().agents.length, 2);
+  } finally { await ctx.close(); }
+});
+
+test("删除批次守卫：跑着的批次不能删（先停止）", async () => {
+  const ctx = await boot();
+  try {
+    const a = await registerAndUpload(ctx, "玄武", baseline);
+    const b = await registerAndUpload(ctx, "朱雀", baseline);
+    // 真跑一条长 leg 太慢：塞一个状态为 running 的 runner，只验闸门（与并发上限用例同一手法）
+    ctx.store.createCohort({
+      id: "c_fake", name: "假批次", masterSeed: 1, gamesPerPair: 1, agentIds: [a, b],
+      plan: { gamesPerPair: 1, legs: [] }, snapshot: [],
+    });
+    ctx.cohortRunners.set("c_fake", { status: "running" } as CohortRunner);
+    const del = await ctx.req({ method: "DELETE", url: "/api/cohorts/c_fake" });
+    assert.equal(del.statusCode, 409);
+    assert.match(del.json().error, /正在跑/);
+    assert.ok(ctx.store.getCohort("c_fake"), "被拒之后批次还在，没被删掉一半");
+  } finally { await ctx.close(); }
+});
+
 test("批次并发上限：已有批次在跑时再发起 → 429", async () => {
   const ctx = await boot();
   try {

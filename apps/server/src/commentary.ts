@@ -507,9 +507,10 @@ export function scheduleCommentary(deps: CommentaryDeps, matchId: string, opts: 
     .then(async () => {
       try {
         const res = await generateCommentary(deps, matchId);
-        if (!res.ok) store.failCommentary(matchId, res.error ?? "生成失败");
+        // 对局中途被删（删赛事/批次）时什么都不写：failCommentary 是 upsert，写下去会给已删的对局复活一行孤儿稿
+        if (!res.ok && store.getMatch(matchId)) store.failCommentary(matchId, res.error ?? "生成失败");
       } catch (err) {
-        store.failCommentary(matchId, errText(err).slice(0, 500));
+        if (store.getMatch(matchId)) store.failCommentary(matchId, errText(err).slice(0, 500));
         deps.logger?.warn?.(`解说生成失败：${matchId} ${errText(err)}`);
       } finally {
         inFlight.delete(matchId);

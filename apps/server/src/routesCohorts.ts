@@ -241,6 +241,24 @@ export function registerCohortRoutes(app: FastifyInstance, deps: CohortRouteDeps
     return { ok: true, note: "已请求停止：当前 leg 跑完即止，已完成的结果会照常汇总" };
   });
 
+  /**
+   * 删除批次：全部 leg（含它们的对局/回放/解说稿）与批次行一起清，评级/矩阵/画像随行消失。
+   * 跑着的批次不能删（先点「停止」等当前 leg 收尾），否则引擎会继续往已删除的 leg 里写对局。
+   */
+  app.delete("/api/cohorts/:id", async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    const cohort = store.getCohort(id);
+    if (!cohort) return fail(reply, 404, "批次不存在");
+    const runner = deps.cohortRunners.get(id);
+    if (runner && (runner.status === "pending" || runner.status === "running")) {
+      return fail(reply, 409, "批次正在跑：先点「停止」，等当前 leg 收尾后再删除");
+    }
+    const deleted = store.deleteCohortTree(id);
+    // 跑完的 runner 会在内存里留 6 小时供前端看结果；批次行都删了，别再让它占着并发位
+    deps.cohortRunners.delete(id);
+    return { ok: true, deleted };
+  });
+
   app.get("/api/cohorts/:id/report", async (req, reply) => {
     const id = (req.params as { id: string }).id;
     const cohort = store.getCohort(id);
