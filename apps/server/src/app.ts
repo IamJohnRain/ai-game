@@ -27,6 +27,9 @@ import {
   SESSION_COOKIE,
 } from "./auth.ts";
 import { renderLoginPage } from "./loginPage.ts";
+import { commentaryBusy, scheduleCommentary, type CommentaryDeps } from "./commentary.ts";
+import { loadLlmSettings, readCommentaryConfig, saveCommentaryConfig } from "./commentarySettings.ts";
+import { probe } from "./llmClient.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..", "..");
@@ -332,6 +335,96 @@ app.get("/api/matches/:id/report", async (req, reply) => {
 });
 
 app.get("/api/leaderboard", async () => ({ rows: store.leaderboard() }));
+
+// ------------------------------------------------------------------ 观战解说（上帝视角解说员）
+// 组织者填 baseUrl / modelId / apiKey 后，每场比赛可以生成一份"关键行为解说稿"：
+// 稿子按事件流下标锚定，回放/观战按光标逐段露出（见 commentary.ts）。密钥只以掩码回显。
+const commentaryDeps: CommentaryDeps = {
+  store,
+  masterKey: config.masterKey,
+  getMap: (mapId: string) => registry.get(mapId),
+  logger: app.log,
+};
+
+/** 生成中但明显卡死（服务重启过/调用被中断）的行：当场判失败，免得前端一直转圈 */
+function settleStaleCommentary(matchId: string): void {
+  const row = store.getCommentary(matchId);
+  if (!row || row.status !== "generating") return;
+  const started = Date.parse(row.createdAt);
+  const budgetMs = 90_000 + 6 * 60_000; // 一次调用最多 90s × 最多 6 段，再宽一点
+  if (Number.isFinite(started) && Date.now() - started > budgetMs) {
+    store.failCommentary(matchId, "生成中断（服务可能重启过），可以重新生成");
+  }
+}
+
+app.get("/api/commentary/settings", async () => readCommentaryConfig(store, config.masterKey));
+
+app.put("/api/commentary/settings", async (req, reply) => {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const pickString = (key: string) => (typeof body[key] === "string" ? { [key]: body[key] as string } : {});
+  const pickNumber = (key: string) => (typeof body[key] === "number" ? { [key]: body[key] as number } : {});
+  try {
+    const view = saveCommentaryConfig(store, config.masterKey, {
+      ...pickString("baseUrl"),
+      ...pickString("modelId"),
+      ...pickString("apiKey"),
+      ...(typeof body.auto === "boolean" ? { auto: body.auto } : {}),
+      ...pickNumber("temperature"),
+      ...pickNumber("maxTokens"),
+      ...pickNumber("timeoutMs"),
+    });
+    return view;
+  } catch (err) {
+    return fail(reply, 400, err instanceof Error ? err.message : String(err));
+  }
+});
+
+app.post("/api/commentary/test", async (req, reply) => {
+  const settings = loadLlmSettings(store, config.masterKey);
+  if (!settings) return fail(reply, 400, "还没配置完整：baseUrl / modelId / apiKey 三项都要填");
+  return probe(settings);
+});
+
+app.get("/api/matches/:id/commentary", async (req, reply) => {
+  const id = (req.params as { id: string }).id;
+  if (!store.getMatch(id)) return fail(reply, 404, "比赛不存在");
+  settleStaleCommentary(id);
+  const row = store.getCommentary(id);
+  return {
+    status: row?.status ?? "none",
+    segments: row?.segments ?? [],
+    modelId: row?.modelId ?? "",
+    baseUrl: row?.baseUrl ?? "",
+    usage: row?.usage ?? null,
+    error: row?.error ?? null,
+    createdAt: row?.createdAt ?? null,
+    finishedAt: row?.finishedAt ?? null,
+    configured: Boolean(loadLlmSettings(store, config.masterKey)),
+  };
+});
+
+app.post("/api/matches/:id/commentary", async (req, reply) => {
+  const id = (req.params as { id: string }).id;
+  if (!store.getMatch(id)) return fail(reply, 404, "比赛不存在");
+  if (!store.getReplay(id)) return fail(reply, 409, "这场比赛还没有回放事件流，没法解说");
+  const body = (req.body ?? {}) as { force?: unknown };
+  const res = scheduleCommentary(commentaryDeps, id, { force: body.force === true });
+  if (!res.queued) {
+    const row = store.getCommentary(id);
+    return { ok: true, queued: false, reason: res.reason ?? "未排队", status: row?.status ?? "none", segments: row?.segments ?? [] };
+  }
+  return { ok: true, queued: true, status: "generating" };
+});
+
+app.delete("/api/matches/:id/commentary", async (req, reply) => {
+  const id = (req.params as { id: string }).id;
+  if (!store.getMatch(id)) return fail(reply, 404, "比赛不存在");
+  if (commentaryBusy() && store.getCommentary(id)?.status === "generating") {
+    return fail(reply, 409, "正在生成中，等它跑完再删");
+  }
+  store.deleteCommentary(id);
+  return { ok: true };
+});
 
 // 单模型画像（docs/08 §4.3）：过程分 + 它名下每个 Agent 的版本数与自测痕迹
 app.get("/api/models/:model/profile", async (req, reply) => {

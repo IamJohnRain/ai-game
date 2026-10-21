@@ -356,7 +356,7 @@ export function registerExternalRoutes(app: FastifyInstance, deps: ExternalRoute
     const rules: Ruleset = body.maxRounds
       ? { ...DEFAULT_RULESET, maxRounds: body.maxRounds }
       : DEFAULT_RULESET;
-    const runner = new TournamentRunner({ store, registry }, {
+    const runner = new TournamentRunner({ store, registry, masterKey: config.masterKey, logger: app.log }, {
       tournamentId: id, agentIds, gamesPerPair, seed, mapId, rules,
       scriptProtocolVersion: SCRIPT_PROTOCOL_VERSION,
     });

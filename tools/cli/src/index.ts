@@ -531,7 +531,7 @@ function cmdInspect(): void {
 // 清空"成绩数据"：对局 / 回放 / 赛事 / 评测批次 / 练习记录。
 // 保留 Agent（含一次性密钥与上传历史）与地图——协议升版后重跑一批成绩时用得上；
 // 要连身份一起清就加 --all（相当于把 Agent 全部作废、需要重新注册）。
-const RESULT_TABLES = ["match_replays", "match_players", "matches", "tournaments", "cohorts", "practice_runs"] as const;
+const RESULT_TABLES = ["match_replays", "match_players", "matches", "match_commentary", "tournaments", "cohorts", "practice_runs"] as const;
 const IDENTITY_TABLES = ["agent_revisions", "agents"] as const;
 
 async function cmdCleanResults(): Promise<void> {

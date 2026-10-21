@@ -183,7 +183,48 @@ CREATE TABLE IF NOT EXISTS agent_revisions (
   source_ip TEXT, uploaded_at TEXT NOT NULL,
   UNIQUE (agent_id, revision)
 );
+-- 观战解说的配置（组织者填的 baseUrl / modelId / apiKey）与逐场解说稿。
+-- 组织者配置是"平台级设置"：clean-results（清成绩）不动它；apiKey 由 master.key 加密后落库（见 secrets.ts）。
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS match_commentary (
+  match_id TEXT PRIMARY KEY, status TEXT NOT NULL,
+  base_url TEXT NOT NULL DEFAULT '', model_id TEXT NOT NULL DEFAULT '',
+  segments_json TEXT NOT NULL DEFAULT '[]', usage_json TEXT, error TEXT,
+  created_at TEXT NOT NULL, finished_at TEXT
+);
 `;
+
+/** 解说稿的一段：锚在事件流的下标 i 上，回放/观战按光标逐段露出 */
+export interface CommentarySegment {
+  /** 锚点：事件流下标（0 基）。UI 按"当前事件下标 ≥ i"决定这一段是否已经播出 */
+  i: number;
+  round: number;
+  /** 说话人：0 = 中立（解说员自己），其余为座位号 */
+  seat: number;
+  tone: "calm" | "hot" | "fun";
+  text: string;
+}
+export interface CommentaryUsage {
+  calls: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  ms: number;
+}
+export type CommentaryStatus = "generating" | "ready" | "failed";
+export interface CommentaryRow {
+  matchId: string;
+  status: CommentaryStatus;
+  baseUrl: string;
+  modelId: string;
+  segments: CommentarySegment[];
+  usage: CommentaryUsage | null;
+  error: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+}
 
 export class Store {
   private db: DatabaseSync;
@@ -567,6 +608,86 @@ export class Store {
   getReport(matchId: string): string | null {
     const row = this.db.prepare("SELECT report_md FROM matches WHERE id = ?").get(matchId) as { report_md?: string } | undefined;
     return row?.report_md ?? null;
+  }
+
+  // ---------------- 设置（组织者填的平台级配置：目前只有观战解说） ----------------
+  getSetting(key: string): string | null {
+    const row = this.db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value?: string } | undefined;
+    return row?.value ?? null;
+  }
+
+  /** 写设置；value 传 null 表示删除这一项 */
+  setSetting(key: string, value: string | null): void {
+    if (value === null) {
+      this.db.prepare("DELETE FROM settings WHERE key = ?").run(key);
+      return;
+    }
+    this.db.prepare(`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+      .run(key, value, new Date().toISOString());
+  }
+
+  listSettings(prefix: string): Record<string, string> {
+    const rows = this.db.prepare("SELECT key, value FROM settings WHERE key LIKE ?").all(`${prefix}%`) as { key: string; value: string }[];
+    return Object.fromEntries(rows.map((r) => [r.key, r.value]));
+  }
+
+  // ---------------- 观战解说（每场比赛一份稿子） ----------------
+  getCommentary(matchId: string): CommentaryRow | null {
+    const row = this.db.prepare("SELECT * FROM match_commentary WHERE match_id = ?").get(matchId) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      matchId: row.match_id as string,
+      status: row.status as CommentaryStatus,
+      baseUrl: (row.base_url as string) ?? "",
+      modelId: (row.model_id as string) ?? "",
+      segments: safeJsonParse<CommentarySegment[]>(row.segments_json as string, []),
+      usage: row.usage_json ? safeJsonParse<CommentaryUsage | null>(row.usage_json as string, null) : null,
+      error: (row.error as string | null) ?? null,
+      createdAt: row.created_at as string,
+      finishedAt: (row.finished_at as string | null) ?? null,
+    };
+  }
+
+  /** 开始生成：占住这一场（status=generating），重复调用会被上面的调用方挡住 */
+  beginCommentary(matchId: string, meta: { baseUrl: string; modelId: string }): void {
+    this.db.prepare(`INSERT INTO match_commentary (match_id, status, base_url, model_id, segments_json, created_at)
+      VALUES (?, 'generating', ?, ?, '[]', ?)
+      ON CONFLICT(match_id) DO UPDATE SET status = 'generating', base_url = excluded.base_url,
+        model_id = excluded.model_id, segments_json = '[]', usage_json = NULL, error = NULL,
+        created_at = excluded.created_at, finished_at = NULL`)
+      .run(matchId, meta.baseUrl, meta.modelId, new Date().toISOString());
+  }
+
+  finishCommentary(matchId: string, data: { segments: CommentarySegment[]; usage: CommentaryUsage | null; baseUrl: string; modelId: string }): void {
+    // upsert：直接调用生成（没经过 beginCommentary 占位）时也要能落库
+    this.db.prepare(`INSERT INTO match_commentary (match_id, status, segments_json, usage_json, error, created_at, finished_at, base_url, model_id)
+      VALUES (?, 'ready', ?, ?, NULL, ?, ?, ?, ?)
+      ON CONFLICT(match_id) DO UPDATE SET status = 'ready', segments_json = excluded.segments_json,
+        usage_json = excluded.usage_json, error = NULL, finished_at = excluded.finished_at,
+        base_url = excluded.base_url, model_id = excluded.model_id`)
+      .run(matchId, JSON.stringify(data.segments), data.usage ? JSON.stringify(data.usage) : null, new Date().toISOString(), new Date().toISOString(), data.baseUrl, data.modelId);
+  }
+
+  failCommentary(matchId: string, error: string): void {
+    this.db.prepare(`INSERT INTO match_commentary (match_id, status, segments_json, error, created_at, finished_at)
+      VALUES (?, 'failed', '[]', ?, ?, ?)
+      ON CONFLICT(match_id) DO UPDATE SET status = 'failed', error = excluded.error, finished_at = excluded.finished_at`)
+      .run(matchId, error, new Date().toISOString(), new Date().toISOString());
+  }
+
+  deleteCommentary(matchId: string): void {
+    this.db.prepare("DELETE FROM match_commentary WHERE match_id = ?").run(matchId);
+  }
+
+  /** 解说状态总览（设置页用来展示"最近哪些场次已经有稿子"） */
+  commentaryStats(): { total: number; ready: number; failed: number } {
+    const row = this.db.prepare(`SELECT
+      COUNT(*) AS total,
+      SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END) AS ready,
+      SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed
+      FROM match_commentary`).get() as { total: number; ready: number | null; failed: number | null };
+    return { total: row.total ?? 0, ready: row.ready ?? 0, failed: row.failed ?? 0 };
   }
 
   // ---------------- cohorts（评测批次，docs/08 §2） ----------------

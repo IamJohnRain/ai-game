@@ -99,6 +99,9 @@ export interface CohortRunnerDeps {
   registry: MapRegistry;
   /** 每条 leg 都是一个 TournamentRunner；登记进来让赛事页/观战页照样能看到实时进度 */
   tournamentRunners: Map<string, TournamentRunner>;
+  /** 主密钥与日志：透传给 leg 里的 TournamentRunner（观战解说要用） */
+  masterKey?: Buffer;
+  logger?: { info?: (msg: string) => void; warn?: (msg: string) => void } | null;
 }
 
 export class CohortRunner extends EventEmitter {
@@ -173,7 +176,7 @@ export class CohortRunner extends EventEmitter {
         legIndex: leg.index,
         leg: { name: leg.plan.name, mapId: leg.plan.mapId, maxRounds: leg.plan.maxRounds, rulesVariant: leg.plan.rulesVariant },
       });
-      const runner = new TournamentRunner({ store, registry: this.deps.registry }, {
+      const runner = new TournamentRunner({ store, registry: this.deps.registry, masterKey: this.deps.masterKey, logger: this.deps.logger }, {
         tournamentId,
         agentIds: this.cohort.agentIds,
         gamesPerPair: this.input.gamesPerPair ?? 2,

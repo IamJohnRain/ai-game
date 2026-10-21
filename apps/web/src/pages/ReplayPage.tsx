@@ -7,7 +7,8 @@ import type { MatchEvent } from "@ai-game/protocol";
 import { bundles, type ReplayBundle } from "../api";
 import { BattleAccumulator, roundStarts } from "../battleState";
 import { BattleStage } from "../components/BattleStage";
-import { EventLog } from "../components/EventLog";
+import { SidePanel } from "../components/SidePanel";
+import { useCommentary } from "../useCommentary";
 import { ScoreCards } from "../components/ScoreCards";
 import { Timeline, type TimelineMark } from "../components/Timeline";
 import { Badge, Banner, EmptyState, matchStatusInfo, seatColor, shortId } from "../ui";
@@ -19,12 +20,15 @@ export function ReplayPage({
   matchId,
   initialMatchId,
   onOpen,
+  onGotoCommentary,
 }: {
   /** 外部指定的比赛（App 导航、赛事详情的「回放」按钮都走这里） */
   matchId?: string | null;
   /** 兜底：matchId 为空时用它（便于外部只传一个初始值即可打开某场比赛） */
   initialMatchId?: string | null;
   onOpen: (page: "watch" | "replay" | "report", matchId: string) => void;
+  /** 未配置解说模型时，解说页签里的“去配置解说”要能跳到设置页 */
+  onGotoCommentary?: () => void;
 }) {
   // 组件内保存"当前回放的比赛"：props 只作为初始值与后续的外部覆盖，换比赛不必推翻整个组件结构
   const [activeId, setActiveId] = useState<string | null>(matchId ?? initialMatchId ?? null);
@@ -40,6 +44,7 @@ export function ReplayPage({
   const [speed, setSpeed] = useState(1); // 0 = 极速
   const [viewpoint, setViewpoint] = useState<number | null>(null);
   const [frame, setFrame] = useState(0);
+  const commentary = useCommentary(activeId ?? null);
 
   const accRef = useRef<BattleAccumulator | null>(null);
   const speedRef = useRef(speed);
@@ -309,7 +314,19 @@ export function ReplayPage({
             </div>
           </div>
           <div className="watch-log">
-            <EventLog log={view.log} version={frame} seats={seats} />
+            <SidePanel
+              log={view.log}
+              version={frame}
+              seats={seats}
+              commentary={commentary.state}
+              commentaryBusy={commentary.busy}
+              commentaryError={commentary.error}
+              cursor={index}
+              onGenerate={(force) => void commentary.generate(force)}
+              onRemove={() => void commentary.remove()}
+              onJump={(i) => { setPlaying(false); setIndex(i); }}
+              onOpenSettings={() => onGotoCommentary?.()}
+            />
           </div>
         </div>
       ) : (

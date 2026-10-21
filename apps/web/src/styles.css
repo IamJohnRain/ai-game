@@ -1845,3 +1845,175 @@ textarea {
     display: none;
   }
 }
+
+/* ---------------- 右侧看板：解说 / 事件 两个页签 ---------------- */
+
+.sidepanel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sp-tabs {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid var(--border-soft);
+  padding-bottom: 6px;
+}
+
+.sp-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 5px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.sp-tab:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.sp-tab-on {
+  color: var(--text);
+  background: var(--bg-soft);
+  border-color: var(--border);
+  font-weight: 600;
+}
+
+.sp-count {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+  padding: 0 6px;
+}
+
+/* 生成中的小圆点：观战页上"解说正在写"这件事不该只在解说页签里才看得到 */
+.sp-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn);
+  animation: sp-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes sp-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+/* ---------------- 解说面板 ---------------- */
+
+.cmt-state {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.cmt-ready {
+  color: var(--ok);
+}
+
+.cmt-generating {
+  color: var(--warn);
+}
+
+.cmt-failed {
+  color: var(--danger);
+}
+
+.cmt-error {
+  color: #fca5a5;
+  font-size: 12px;
+  background: rgba(248, 113, 113, 0.08);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.cmt-list {
+  gap: 6px;
+}
+
+/* 每条解说是一个按钮：点它 = 把回放光标跳到这句话锚定的事件上 */
+.cmt-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
+  gap: 4px 8px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-left: 3px solid transparent;
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: #cbd5e1;
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.55;
+  cursor: pointer;
+}
+
+.cmt-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.cmt-round {
+  color: #5c6b82;
+  font-family: var(--mono);
+  font-size: 11px;
+  align-self: start;
+  padding-top: 1px;
+}
+
+.cmt-text {
+  word-break: break-word;
+}
+
+.cmt-tone {
+  grid-column: 2;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+/* 当前正在说的那一段（光标所在） */
+.cmt-cur {
+  background: rgba(122, 162, 255, 0.12);
+  color: #e8eefb;
+  box-shadow: inset 0 0 0 1px rgba(122, 162, 255, 0.35);
+}
+
+/* 光标还没走到（默认折叠"显示全文"时看不到它们，这里只是防御性样式） */
+.cmt-ahead {
+  opacity: 0.45;
+}
+
+/* ---------------- 解说设置页 ---------------- */
+
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin: 10px 0;
+}
+
+.hint-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.75;
+}
+
+.hint-list code {
+  word-break: break-all;
+}

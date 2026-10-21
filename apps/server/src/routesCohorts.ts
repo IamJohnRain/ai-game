@@ -65,7 +65,7 @@ function pickBestRevision(store: Store, agentId: string): number | null {
 }
 
 export function registerCohortRoutes(app: FastifyInstance, deps: CohortRouteDeps): void {
-  const { store, registry } = deps;
+  const { store, registry, config } = deps;
 
   const launch = (body: z.infer<typeof CohortInput>): { ok: true; cohortId: string; legs: number; totalMatches: number; participants: number } | { ok: false; code: number; error: string } => {
     const agentIds = [...new Set(body.agentIds)];
@@ -144,7 +144,7 @@ export function registerCohortRoutes(app: FastifyInstance, deps: CohortRouteDeps
       ],
     });
 
-    const runner = new CohortRunner({ store, registry, tournamentRunners: deps.tournamentRunners }, cohort, {
+    const runner = new CohortRunner({ store, registry, tournamentRunners: deps.tournamentRunners, masterKey: config.masterKey, logger: app.log }, cohort, {
       agentIds, name, masterSeed, gamesPerPair,
       legs: plan as CohortLegPlan[],
       includeCalibration,

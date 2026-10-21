@@ -11,6 +11,7 @@ import { ReportPage } from "./pages/ReportPage";
 import { LeaderboardPage } from "./pages/LeaderboardPage";
 import { CohortsPage } from "./pages/CohortsPage";
 import { MapEditorPage } from "./pages/MapEditorPage";
+import { CommentaryPage } from "./pages/CommentaryPage";
 import { Badge, Banner, EmptyState, Section, fmtTime, matchStatusInfo, shortId } from "./ui";
 
 export type Nav =
@@ -21,7 +22,8 @@ export type Nav =
   | { page: "replay"; matchId: string | null }
   | { page: "report"; matchId: string | null }
   | { page: "board" }
-  | { page: "editor" };
+  | { page: "editor" }
+  | { page: "commentary" };
 
 const NAV_ITEMS: { key: Nav["page"]; label: string }[] = [
   { key: "agents", label: "Agent 自助接入" },
@@ -32,6 +34,7 @@ const NAV_ITEMS: { key: Nav["page"]; label: string }[] = [
   { key: "report", label: "战报" },
   { key: "board", label: "排行榜" },
   { key: "editor", label: "地图编辑器" },
+  { key: "commentary", label: "解说设置" },
 ];
 
 export function App() {
@@ -78,6 +81,7 @@ export function App() {
       case "agents":
       case "board":
       case "editor":
+      case "commentary":
         setNav({ page: target.page });
         break;
       case "cohorts":
@@ -203,6 +207,10 @@ export function App() {
         {nav.page === "board" ? <LeaderboardPage /> : null}
 
         {nav.page === "editor" ? <MapEditorPage /> : null}
+
+        {nav.page === "commentary" ? (
+          <CommentaryPage onOpenReplay={() => go({ page: "replay", matchId: lastMatchId })} />
+        ) : null}
       </main>
 
       <footer className="footer">

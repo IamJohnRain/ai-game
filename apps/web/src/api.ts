@@ -539,7 +539,90 @@ export const api = {
     request<{ tournamentId: string; seed: number; mapId: string }>("POST", "/tournaments", input),
   getTournament: (id: string) => request<TournamentDetail>("GET", `/tournaments/${encodeURIComponent(id)}`),
   getTournamentReport: (id: string) => requestText(`/tournaments/${encodeURIComponent(id)}/report`),
+
+  // —— 观战解说（上帝视角解说员）：配置 + 逐场稿子
+  /** 配置只回掩码（apiKeyMasked）；apiKey 明文永远不会从后端回来 */
+  commentarySettings: () => request<CommentaryConfig>("GET", "/commentary/settings"),
+  saveCommentarySettings: (patch: CommentaryConfigPatch) =>
+    request<CommentaryConfig>("PUT", "/commentary/settings", patch),
+  /** 连通性自检：真发一次 ping，确认 baseUrl / modelId / apiKey 三者都对 */
+  testCommentary: () =>
+    request<{ ok: true; ms: number; model: string; reply: string } | { ok: false; error: string }>(
+      "POST",
+      "/commentary/test",
+      {},
+    ),
+  matchCommentary: (matchId: string) =>
+    request<CommentaryState>("GET", `/matches/${encodeURIComponent(matchId)}/commentary`),
+  /** 生成（排队执行；返回后轮询 matchCommentary 看进度） */
+  generateCommentary: (matchId: string, force = false) =>
+    request<{ ok: boolean; queued: boolean; reason?: string; status: string; segments?: CommentarySegment[] }>(
+      "POST",
+      `/matches/${encodeURIComponent(matchId)}/commentary`,
+      { force },
+    ),
+  deleteCommentary: (matchId: string) =>
+    request<{ ok: true }>("DELETE", `/matches/${encodeURIComponent(matchId)}/commentary`),
 };
+
+// ---------------- 观战解说（与后端 apps/server/src/{commentary,commentarySettings}.ts 对齐） ----------------
+
+export interface CommentarySegment {
+  /** 锚点：事件流下标（回放/观战按光标 ≥ i 决定这一段是否已经播出） */
+  i: number;
+  round: number;
+  /** 0 = 中立（解说员），其余为座位号 */
+  seat: number;
+  tone: "calm" | "hot" | "fun";
+  text: string;
+}
+
+export interface CommentaryUsage {
+  calls: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  ms: number;
+}
+
+export interface CommentaryState {
+  /** none = 还没生成过 */
+  status: "none" | "generating" | "ready" | "failed";
+  segments: CommentarySegment[];
+  modelId: string;
+  baseUrl: string;
+  usage: CommentaryUsage | null;
+  error: string | null;
+  createdAt: string | null;
+  finishedAt: string | null;
+  /** 后端是否已经配好 baseUrl/modelId/apiKey */
+  configured: boolean;
+}
+
+export interface CommentaryConfig {
+  configured: boolean;
+  baseUrl: string;
+  modelId: string;
+  apiKeyMasked: string;
+  hasApiKey: boolean;
+  auto: boolean;
+  temperature: number;
+  maxTokens: number;
+  timeoutMs: number;
+  updatedAt: string | null;
+  stats: { total: number; ready: number; failed: number };
+}
+
+export interface CommentaryConfigPatch {
+  baseUrl?: string;
+  modelId?: string;
+  /** 留空（不传）= 不修改已存的密钥；传空串 = 清除 */
+  apiKey?: string;
+  auto?: boolean;
+  temperature?: number;
+  maxTokens?: number;
+  timeoutMs?: number;
+}
 
 // ---------------- 组合加载：页面渲染战场前需要 (map, rules) ----------------
 

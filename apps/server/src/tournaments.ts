@@ -4,12 +4,16 @@ import type { GameMap, MatchResult, Ruleset } from "@ai-game/protocol";
 import { runTournament, type Standing, type TournamentAgent, type TournamentMatchRecord } from "@ai-game/orchestrator";
 import type { MapRegistry } from "./maps.ts";
 import { persistMatchResult, type StoredSeat } from "./persist.ts";
+import { scheduleCommentary } from "./commentary.ts";
 import type { Store, TournamentRow } from "./store.ts";
 
 export interface TournamentRunnerDeps {
   store: Store;
   /** 赛事用图从注册表取（可能是编辑器保存的自定义地图） */
   registry: MapRegistry;
+  /** 主密钥：观战解说要读加密存着的 modelKey（没配解说时用不到，可以是空 Buffer） */
+  masterKey?: Buffer;
+  logger?: { info?: (msg: string) => void; warn?: (msg: string) => void } | null;
 }
 
 export interface TournamentRunOptions {
@@ -170,5 +174,20 @@ export class TournamentRunner extends EventEmitter {
       scriptProtocolVersion: this.opts.scriptProtocolVersion,
       tournamentId: this.opts.tournamentId, startedAt,
     });
+    // 观战解说：配了解说模型就排队生成（不阻塞赛事；未配置/自动开关关掉时这里什么也不做，也不抛错）
+    try {
+      const res = scheduleCommentary(
+        {
+          store: this.deps.store,
+          masterKey: this.deps.masterKey ?? Buffer.alloc(0),
+          getMap: (id) => this.deps.registry.get(id),
+          logger: this.deps.logger,
+        },
+        matchId,
+      );
+      if (res.queued) this.deps.logger?.info?.(`已排队生成解说：${matchId}`);
+    } catch (err) {
+      this.deps.logger?.warn?.(`解说排队失败（不影响赛事）：${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 }

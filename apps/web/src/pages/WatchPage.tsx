@@ -17,7 +17,8 @@ import {
 import { BattleAccumulator } from "../battleState";
 import { openMatchSocket, type ConnectionStatus } from "../ws";
 import { BattleStage } from "../components/BattleStage";
-import { EventLog } from "../components/EventLog";
+import { SidePanel } from "../components/SidePanel";
+import { useCommentary } from "../useCommentary";
 import { ScoreCards } from "../components/ScoreCards";
 import { PhaseBar } from "../components/ProgressBar";
 import { Badge, Banner, matchStatusInfo, seatColor, shortId } from "../ui";
@@ -30,9 +31,11 @@ interface WatchPageProps {
   onOpen: (page: "watch" | "replay" | "report", matchId: string) => void;
   /** 跳回赛事页（"同配置再战"会新建一场赛事，进度在赛事详情里看） */
   onGotoTournament: (tournamentId?: string) => void;
+  /** 未配置解说模型时，解说页签里的“去配置解说”要能跳到设置页 */
+  onGotoCommentary?: () => void;
 }
 
-export function WatchPage({ matchId, onOpen, onGotoTournament }: WatchPageProps) {
+export function WatchPage({ matchId, onOpen, onGotoTournament, onGotoCommentary }: WatchPageProps) {
   const [bundle, setBundle] = useState<MatchBundle | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -55,6 +58,7 @@ export function WatchPage({ matchId, onOpen, onGotoTournament }: WatchPageProps)
   const [rematching, setRematching] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
+  const commentary = useCommentary(matchId);
   const accRef = useRef<BattleAccumulator | null>(null);
   const speedRef = useRef(speed);
   const budgetRef = useRef(0);
@@ -397,7 +401,19 @@ export function WatchPage({ matchId, onOpen, onGotoTournament }: WatchPageProps)
             </div>
           </div>
           <div className="watch-log">
-            <EventLog log={view.log} version={frame} seats={seats} />
+            <SidePanel
+              log={view.log}
+              version={frame}
+              seats={seats}
+              commentary={commentary.state}
+              commentaryBusy={commentary.busy}
+              commentaryError={commentary.error}
+              cursor={acc ? acc.applied : 0}
+              onGenerate={(force) => void commentary.generate(force)}
+              onRemove={() => void commentary.remove()}
+              onJump={() => { /* 观战是直播节拍，不支持回跳；看回放可以点句子跳转 */ }}
+              onOpenSettings={() => onGotoCommentary?.()}
+            />
           </div>
         </div>
       ) : (
