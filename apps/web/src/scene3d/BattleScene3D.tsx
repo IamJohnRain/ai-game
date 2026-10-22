@@ -276,10 +276,10 @@ export function BattleScene3D(props: BattleScene3DProps) {
     if (MODEL_API.tank) {
       void loadModel(MODEL_API.tank.url).then((asset) => {
         if (!asset || !stateRef.current) return;
-        tankModelRef.current = buildTankModel(asset, 0xffffff, MODEL_API.tank!.span);
+        tankModelRef.current = buildTankModel(asset, 0xffffff, MODEL_API.tank!.span, MODEL_API.tank!.forward);
         // 模型到位后把每辆车换成模型（车体/炮塔分别挂，炮塔照样能独立转向）
         for (const [seat, rig] of stateRef.current.rigs) {
-          rig.useModel(buildTankModel(asset, SEAT_COLORS_3D[seat] ?? 0x94a3b8, MODEL_API.tank!.span));
+          rig.useModel(buildTankModel(asset, SEAT_COLORS_3D[seat] ?? 0x94a3b8, MODEL_API.tank!.span, MODEL_API.tank!.forward));
         }
         poke(stateRef.current, propsRef.current);
       });

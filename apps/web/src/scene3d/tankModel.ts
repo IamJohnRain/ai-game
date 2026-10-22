@@ -6,18 +6,32 @@
 //
 // 阵营配色也走材质：车体与炮塔染成座位色（保留素材的明暗层次），履带与炮管保持深色——
 // 这样四辆车一眼能分清归属，又不至于把模型涂成一整块纯色。
+//
+// 车头朝向：**由素材声明**（assets.ts 的 `forward`），不再从包围盒"哪端伸得更远"去猜。
+// 这一版素材的炮管端（+1.36）与尾部（−1.14）在居中之后几乎等长，"谁更远"会取到浮点上的
+// 负端，结果整车被多转 180°：车头朝后、炮口画在车尾、炮弹从屁股飞出去。
 import * as THREE from "three";
 import type { ModelAsset, ModelPart } from "./models.ts";
+
+/** 素材车头在模型坐标里的朝向（three 的 Y-up 系；渲染层统一以 +Z 为"车前"） */
+export type TankForward = "z+" | "z-" | "x+" | "x-";
+
+const FORWARD_VEC: Record<TankForward, THREE.Vector3> = {
+  "z+": new THREE.Vector3(0, 0, 1),
+  "z-": new THREE.Vector3(0, 0, -1),
+  "x+": new THREE.Vector3(1, 0, 0),
+  "x-": new THREE.Vector3(-1, 0, 0),
+};
 
 export interface TankModel {
   /** 车体部件（直接挂在车体组下） */
   bodyParts: { geometry: THREE.BufferGeometry; material: THREE.Material; matrix: THREE.Matrix4 }[];
   /** 炮塔部件（挂在会转向的炮塔组下） */
   turretParts: { geometry: THREE.BufferGeometry; material: THREE.Material; matrix: THREE.Matrix4 }[];
-  /** 炮口位置（模型局部坐标，+Z 为车头方向） */
+  /** 炮口位置（**rig 空间**：已经按 yawOffset 转到"车头 +Z"的坐标系里） */
   muzzle: THREE.Vector3;
-  /** 素材车头是否朝 -Z（是的话上层要把模型整体转 180°） */
-  forwardFlip: boolean;
+  /** 把素材扳正到"车头 +Z"所需的额外旋转（弧度：0 / ±π/2 / π） */
+  yawOffset: number;
   /** 素材原始尺寸（用于按"一格"归一化） */
   size: THREE.Vector3;
 }
@@ -34,9 +48,14 @@ export function classifyPart(part: ModelPart): "body" | "turret" | "track" {
 
 /**
  * 从模型素材里搭出一辆坦克。
- * seatColor 决定染色；span 是"车长占几格"（一棵树、一辆坦克都按同一套归一化口径）。
+ * seatColor 决定染色；span 是"车长占几格"；forward 是素材自己的车头方向（默认 +Z）。
  */
-export function buildTankModel(asset: ModelAsset, seatColor: number, span: number): TankModel {
+export function buildTankModel(
+  asset: ModelAsset,
+  seatColor: number,
+  span: number,
+  forward: TankForward = "z+",
+): TankModel {
   const maxSpan = Math.max(asset.size.x, asset.size.z, 0.0001);
   const k = span / maxSpan;
   const scale = new THREE.Matrix4().makeScale(k, k, k);
@@ -44,13 +63,22 @@ export function buildTankModel(asset: ModelAsset, seatColor: number, span: numbe
   const light = color.clone().lerp(new THREE.Color(0xffffff), 0.1);
   const dark = color.clone().multiplyScalar(0.5);
 
+  // 把车头方向转到 +Z：R(θ) 的 x' = x·cosθ + z·sinθ、z' = −x·sinθ + z·cosθ，
+  // 解 R(θ)·f = (0,0,1) 得 θ = atan2(−fx, fz)。
+  const f = FORWARD_VEC[forward] ?? FORWARD_VEC["z+"];
+  const yawOffset = Math.atan2(-f.x, f.z);
+  const up = new THREE.Vector3(0, 1, 0);
+
   const bodyParts: TankModel["bodyParts"] = [];
   const turretParts: TankModel["turretParts"] = [];
-  /** 炮管端点（用于推炮口位置）：在归一化后的模型坐标里取绝对值最大的那个 z */
-  let tipZ = 0;
-  let tipY = 0.3;
-  const box = new THREE.Box3();
-  let rawTip = 0;
+  /**
+   * 炮塔顶点（已经是归一化后的 rig 前坐标系）：炮口取"沿车头方向投影最远的一圈顶点"的中心。
+   * 这样炮口正好落在炮管端面上、高度也在炮管轴线上，而不是整个图元包围盒的中点
+   * （后者会被尾部的排气管/工具箱拉偏，还会把曳光弹的起点画到车顶上方）。
+   */
+  const along: { x: number; y: number; z: number; p: number }[] = [];
+  let maxProj = -Infinity;
+  const v = new THREE.Vector3();
 
   for (const part of asset.parts) {
     const kind = classifyPart(part);
@@ -63,24 +91,47 @@ export function buildTankModel(asset: ModelAsset, seatColor: number, span: numbe
     const entry = { geometry: part.geometry as THREE.BufferGeometry, material, matrix };
     if (kind === "turret") {
       turretParts.push(entry);
-      // 炮管图元的包围盒最远端就是炮口
-      part.geometry.computeBoundingBox();
-      box.copy(part.geometry.boundingBox!).applyMatrix4(matrix);
-      if (Math.abs(box.max.z) > Math.abs(tipZ) || Math.abs(box.min.z) > Math.abs(tipZ)) {
-        rawTip = Math.abs(box.max.z) > Math.abs(box.min.z) ? box.max.z : box.min.z;
-        tipZ = Math.abs(rawTip);
-        tipY = (box.max.y + box.min.y) / 2;
+      const pos = (part.geometry as THREE.BufferGeometry).getAttribute("position");
+      if (pos) {
+        for (let i = 0; i < pos.count; i++) {
+          v.fromBufferAttribute(pos, i).applyMatrix4(matrix);
+          const p = v.dot(f);
+          if (p > maxProj) maxProj = p;
+          along.push({ x: v.x, y: v.y, z: v.z, p });
+        }
       }
     } else {
       bodyParts.push(entry);
     }
   }
 
+  // 炮口：最前缘一圈顶点的平均位置，再沿车头方向推到最前缘（保证在炮管端面上）
+  const muzzle = new THREE.Vector3(0, 0.4, 0);
+  if (along.length > 0) {
+    const band = 0.02; // 归一化单位：约占一格的 2%，足够圈住炮管端面那一圈
+    const ring = along.filter((p) => p.p >= maxProj - band);
+    if (ring.length > 0) {
+      // 先归零再累加：上面的 0.4 只是"素材没有几何"时的兜底，不能混进平均值
+      muzzle.set(0, 0, 0);
+      for (const r of ring) {
+        muzzle.x += r.x;
+        muzzle.y += r.y;
+        muzzle.z += r.z;
+      }
+      muzzle.multiplyScalar(1 / ring.length);
+      muzzle.addScaledVector(f, maxProj - muzzle.dot(f));
+    } else {
+      muzzle.set(0, 0.4, maxProj);
+    }
+  }
+  // rig 空间 = 素材空间绕 Y 转 yawOffset（车体与炮塔在 useModel 里会被同样旋转）
+  muzzle.applyAxisAngle(up, yawOffset);
+
   return {
     bodyParts,
     turretParts,
-    muzzle: new THREE.Vector3(0, tipY, tipZ),
-    forwardFlip: rawTip < 0,
+    muzzle,
+    yawOffset,
     size: asset.size.clone(),
   };
 }

@@ -12,13 +12,15 @@ import rocksUrl from "../assets/models/kenney/detail-rocks.glb?url";
 import crystalUrl from "../assets/models/kenney/detail-crystal.glb?url";
 import colormapUrl from "../assets/models/kenney/colormap.png?url";
 import tankUrl from "../assets/models/tank-quaternius.glb?url";
+import type { TankForward } from "./tankModel.ts";
 import type { WorldModels } from "./world.ts";
 
 export interface ModelApi {
   /** GLB 内部引用的贴图名 → 打包后的实际地址（Kenney 的模型共用一个 colormap） */
   textures: Record<string, string>;
   world: WorldModels;
-  tank?: { url: string; span: number };
+  /** forward：素材自己的车头朝向（默认 +Z）。换素材时先看炮管指向哪边，别让代码猜。 */
+  tank?: { url: string; span: number; forward?: TankForward };
 }
 
 export const MODEL_API: ModelApi = {
@@ -32,5 +34,7 @@ export const MODEL_API: ModelApi = {
     // 资源点：水晶
     crystal: { url: crystalUrl, span: 0.9 },
   },
-  tank: { url: tankUrl, span: 0.98 },
+  // 车头朝 +Z：依据是 GLB 顶点里炮管那段细管在 +Z 端（尾部 −Z 的细管是排气管，
+  // 两者居中后几乎等长，所以模型自己的包围盒判断不了，这里必须显式写明）。
+  tank: { url: tankUrl, span: 0.98, forward: "z+" },
 };

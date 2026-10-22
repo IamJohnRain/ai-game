@@ -17,6 +17,8 @@ import { attachParts } from "./models.ts";
 /** 车体尺寸：一个格子放得下，且留出缝隙能看出两辆车贴在一起时是两辆 */
 const HULL = { w: 0.62, h: 0.24, d: 0.8 };
 const TRACK_X = 0.33;
+/** 过程式炮塔的抬升：素材炮塔自带真实高度，换装后必须归零（否则炮塔整体浮在车体上方） */
+const TURRET_Y = 0.34;
 /** 过程式炮口在炮塔局部坐标里的位置（+Z 为车头方向）；用素材时会被素材算出的炮口替换 */
 const MUZZLE_LOCAL = new THREE.Vector3(0, 0, 0.68);
 /** 位置/朝向的收敛速度（每秒）；位置比朝向略快，转弯时看起来像"先到位再转正" */
@@ -151,7 +153,7 @@ export class TankRig {
     barrel.castShadow = init.shadows;
     const muzzleBrake = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.09, 8).rotateX(Math.PI / 2), barrelMat);
     muzzleBrake.position.set(0, 0, 0.62);
-    this.turretGroup.position.y = 0.34;
+    this.turretGroup.position.y = TURRET_Y;
     this.turretGroup.add(turretMesh, turretFront, mantlet, cupola, barrel, muzzleBrake);
     // 素材模式的容器：过程式部件留在原地，素材挂到这两个空组里（必须挂进场景图，否则永远不渲染）
     this.bodyGroup.add(this.bodyModel);
@@ -233,7 +235,7 @@ export class TankRig {
   }
 
   /**
-   * 换装成低模素材：车体与炮塔分别挂进各自的容器，炮口按素材的炮管端点重算。
+   * 换装成低模素材：车体与炮塔分别挂进各自的容器，炮口按素材炮管端面重算。
    * 过程式几何只是隐藏、不销毁 —— 素材出问题时把 visible 翻回来就能立刻回退。
    */
   useModel(model: TankModel): void {
@@ -241,10 +243,13 @@ export class TankRig {
     for (const child of [...this.turretGroup.children]) if (child !== this.turretModel) child.visible = false;
     for (const child of [...this.bodyModel.children]) this.bodyModel.remove(child);
     for (const child of [...this.turretModel.children]) this.turretModel.remove(child);
-    // 车头对齐：素材可能朝 -Z，用一层只做 180° 旋转的组把它扳正（车体与炮塔都要转）
-    const flip = model.forwardFlip ? Math.PI : 0;
-    this.bodyModel.rotation.y = flip;
-    this.turretModel.rotation.y = flip;
+    // 车头对齐：素材声明的车头方向可能不是 +Z（甚至朝后），用一层只做 Y 轴旋转的组把它扳正。
+    // 车体与炮塔必须转同一个角度，否则炮塔的"零位"会和车体错开。
+    this.bodyModel.rotation.y = model.yawOffset;
+    this.turretModel.rotation.y = model.yawOffset;
+    // 素材部件的矩阵里已经带着各自真实的高度（buildAsset 把"底面贴地"烘进去了）：
+    // 过程式炮塔那 0.34 的抬升必须归零，否则素材炮塔会浮在车体上方、和履带之间留一道空缝。
+    this.turretGroup.position.y = 0;
     attachParts(this.bodyModel, model.bodyParts, { shadows: this.shadows });
     attachParts(this.turretModel, model.turretParts, { shadows: this.shadows });
     this.muzzleLocal.copy(model.muzzle);
@@ -413,9 +418,12 @@ export class TankRig {
     this.group.rotation.y = this.yaw;
     // 炮塔用"世界角度"记录（跟车体、跟目标都是同一个坐标系），但写进 three 的却是**局部**旋转：
     // 必须减掉车体角度，否则车体一转，炮口就多转一倍（车头朝西时炮口会指向南）。
-    this.turretGroup.rotation.y = this.turretYaw - this.yaw;
-    // 后坐：炮管沿 -Z 缩回一点
-    this.turretGroup.position.z = -0.06 * this.recoil;
+    const turretRel = this.turretYaw - this.yaw;
+    this.turretGroup.rotation.y = turretRel;
+    // 后坐：沿**炮管方向**缩回一点（turretGroup 的位置写在车体坐标系里，
+    // 所以要按炮塔相对车体的角度把 -Z 转过去；否则侧向开炮时炮塔会朝车尾滑）
+    this.turretGroup.position.x = -0.06 * this.recoil * Math.sin(turretRel);
+    this.turretGroup.position.z = -0.06 * this.recoil * Math.cos(turretRel);
     const s = 0.86 + 0.14 * this.pop;
     this.group.scale.set(s, this.pop < 1 ? Math.max(0.3, s) : 1, s);
     this.marker.rotation.y += dt * 0.9;
