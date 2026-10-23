@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { DEFAULT_RULESET, type GameMap, type MatchEvent } from "@ai-game/protocol";
 import { Store } from "../src/store.ts";
-import { buildTimeline, chunkEntries, clampEntries, extractJson, normalizeSegments, generateCommentary, rulesetForVersion, scheduleCommentary, type TimelineEntry } from "../src/commentary.ts";
+import { buildTimeline, chunkEntries, clampEntries, extractJson, normalizeSegments, generateCommentary, rulesetForVersion, salvageSegments, scheduleCommentary, stripReasoning, FACTS_PER_CALL, MAX_ENTRIES, type TimelineEntry } from "../src/commentary.ts";
 import { loadLlmSettings, readCommentaryConfig, saveCommentaryConfig } from "../src/commentarySettings.ts";
 import { maskSecret, openSecret, sealSecret } from "../src/secrets.ts";
 import { chat, chatCompletionsUrl, normalizeBaseUrl } from "../src/llmClient.ts";
@@ -170,12 +170,17 @@ test("时间线：连续无事发生的回合并成一段；条目太多时按�
   const many: TimelineEntry[] = Array.from({ length: 260 }, (_, idx) => ({ i: idx * 10, round: idx, kind: "econ", text: `R${idx}：动了动` }));
   many.push({ i: 999, round: 99, kind: "death", text: "P1 阵亡" });
   const clamped = clampEntries(many);
-  assert.ok(clamped.length <= 200, `裁剪后应 ≤200，实际 ${clamped.length}`);
+  assert.ok(clamped.length <= MAX_ENTRIES, `裁剪后应 ≤${MAX_ENTRIES}，实际 ${clamped.length}`);
   assert.ok(clamped.some((e) => e.kind === "death"), "关键条目必须保留");
   assert.ok(clamped.length < many.length, "确实抽稀了");
   const chunks = chunkEntries(many);
   assert.ok(chunks.length <= 6, "最多 6 次调用");
   assert.equal(chunks.flat().length, many.length, "分块不丢条目");
+  // 裁剪后再分块：每批事实条数不能太多（推理模型的输出额度有限，给太多会截断成半截 JSON）
+  const clampedChunks = chunkEntries(clamped);
+  for (const c of clampedChunks) {
+    assert.ok(c.length <= FACTS_PER_CALL, `单批事实条数应 ≤${FACTS_PER_CALL}，实际 ${c.length}`);
+  }
 });
 
 test("解析：围栏 JSON / 前后废话 / 数组形态都能吃下；锚点非法时就近吸附", () => {
@@ -201,6 +206,31 @@ test("解析：围栏 JSON / 前后废话 / 数组形态都能吃下；锚点非
   assert.equal(segs[0]!.text, "往前吸附到 10", "同一个锚点先到先得（模型把 i 编错时，先落地的赢）");
   assert.equal(segs[1]!.tone, "hot");
   assert.equal(segs[1]!.seat, 2);
+});
+
+test("解析：推理模型的 <think> 思维链要剥掉（MiniMax-M3 这类会先自言自语）", () => {
+  // 思维链里带花括号与示例 JSON：不去掉的话解析会从推理块里的第一个 { 开始配对 → 解析出垃圾
+  const withThink = '<think>先想一下 {"segments":[{"i":9}]} 再作答</think>\n{"segments":[{"i":1,"text":"嗯"}]}';
+  assert.deepEqual(extractJson(withThink), { segments: [{ i: 1, text: "嗯" }] });
+  // 没闭合（被 max_tokens 截断）：思维链后没有正文，解析不出 JSON
+  assert.equal(extractJson('<think>想了半天 {"segments":[{"i":1'), null);
+  // 整段都是思维链（模型没给出正文）：返回空串，让调用方当"这一批没内容"处理
+  assert.equal(stripReasoning("<think>只有推理，没有正文</think>"), "");
+  assert.equal(stripReasoning("<think>没闭合，被 max_tokens 截断了"), "");
+  // 普通文本原样返回
+  assert.equal(stripReasoning("没有思维链"), "没有思维链");
+});
+
+test("抢救：被截断的 JSON 里已经写完的几条要能捞出来", () => {
+  const truncated = '{"segments":[{"i":122,"round":21,"seat":2,"tone":"hot","text":"第一条"},{"i":184,"round":31,"seat":1,"tone":"calm","text":"第二条"},{"i":253,"round":41,"seat":1,"tone":"hot","tex';
+  const got = salvageSegments(truncated) as { i: number; text: string }[];
+  assert.equal(got.length, 2, "两条完整的应当捞出来，半截的那条不算");
+  assert.deepEqual(got.map((g) => g.i), [122, 184]);
+  assert.equal(got[0]!.text, "第一条");
+  // 整段 JSON 完整时也能捞（不冲突）
+  assert.equal(salvageSegments('{"segments":[{"i":1,"text":"x"}]}').length, 1);
+  // 思维链里的示例 JSON 不算（先剥掉思维链）
+  assert.equal(salvageSegments('<think>{"segments":[{"i":9}]}</think>').length, 0);
 });
 
 test("规则版本 → Ruleset：变体名能解析，认不出退回默认", () => {
@@ -279,6 +309,87 @@ test("生成解说：分段调用假模型 → 稿子锚点合法、写库、带
     assert.equal(fake.seen[0]!.url, "/v1/chat/completions");
     assert.equal(fake.seen[0]!.auth, "Bearer sk-test");
     assert.equal(fake.seen[0]!.body.model, "fake-model");
+  } finally {
+    await fake.close();
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("生成解说：推理模型把 JSON 截断时，抢救已写完的几条，而不是把半截 JSON 当解说词", async () => {
+  const { dir, store, masterKey } = storeWith();
+  // 假推理模型：先吐一段 <think> 思维链，再给一条**没写完**的 JSON（模拟被 max_tokens 截断）
+  const fake = await startFakeLlm((req, reply) => {
+    const user = req.body.messages?.find((m) => m.role === "user")?.content ?? "";
+    const ids = [...user.matchAll(/\[i=(\d+)\]/g)].map((m) => Number(m[1]));
+    const first = ids[0] ?? 0;
+    const second = ids[1] ?? 1;
+    const body = `<think>先想一下 {"segments":[{"i":${first}]}</think>\n{"segments":[{"i":${first},"round":1,"seat":0,"tone":"calm","text":"第一条完好"},{"i":${second},"round":1,"seat":0,"tone":"hot","text":"第二条完好"},{"i":999,"round":1,"seat":0,"tone":"calm","tex`;
+    reply(200, JSON.stringify({
+      choices: [{ message: { role: "assistant", content: body }, finish_reason: "length" }],
+      usage: { prompt_tokens: 100, completion_tokens: 400, total_tokens: 500 },
+    }));
+  });
+  try {
+    store.createMatch({ id: "m-trunc", status: "running", mapId: MAP.mapId, mapVersion: MAP.version, rulesetVersion: DEFAULT_RULESET.version, scriptProtocolVersion: "p1.1", seed: 1, seatCount: 2, turnIntervalMs: 50, config: {} });
+    store.savePlayer("m-trunc", 1, { modelId: "m1", name: "甲", status: "OK" });
+    store.savePlayer("m-trunc", 2, { modelId: "m2", name: "乙", status: "OK" });
+    store.saveReplay("m-trunc", sampleEvents(), [stats(1), stats(2)] as never);
+    store.setMatchStatus("m-trunc", "finished", { endedAt: new Date().toISOString() });
+
+    saveCommentaryConfig(store, masterKey, { baseUrl: `http://127.0.0.1:${fake.port}/v1`, modelId: "thinker", apiKey: "sk-test", auto: false });
+    const res = await generateCommentary({ store, masterKey, getMap: () => MAP }, "m-trunc");
+    assert.equal(res.ok, true, res.error);
+    const row = store.getCommentary("m-trunc")!;
+    assert.equal(row.status, "ready");
+    assert.ok(row.segments.length >= 2, `至少要抢救出写完的那几条，实际 ${row.segments.length}`);
+    for (const s of row.segments) {
+      assert.ok(!/^\s*\{/.test(s.text), `不能把半截 JSON 当解说词：${s.text.slice(0, 60)}`);
+      assert.ok(!/think/i.test(s.text), `不能把思维链当解说词：${s.text.slice(0, 60)}`);
+    }
+    assert.ok(row.segments.some((s) => s.text === "第一条完好"), "已写完的解说要保住");
+  } finally {
+    await fake.close();
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("生成解说：某一批模型只吐思维链没给正文时，拆成两半重问，别整批丢掉", async () => {
+  const { dir, store, masterKey } = storeWith();
+  let firstCall = true;
+  const fake = await startFakeLlm((req, reply) => {
+    const user = req.body.messages?.find((m) => m.role === "user")?.content ?? "";
+    const ids = [...user.matchAll(/\[i=(\d+)\]/g)].map((m) => Number(m[1]));
+    if (firstCall) {
+      // 第一次：额度全花在"想"上，正文一个字没有
+      firstCall = false;
+      reply(200, JSON.stringify({
+        choices: [{ message: { role: "assistant", content: "<think>让我先理清这一段要说什么</think>" }, finish_reason: "length" }],
+        usage: { prompt_tokens: 100, completion_tokens: 200, total_tokens: 300 },
+      }));
+      return;
+    }
+    const segments = ids.map((i) => ({ i, round: 1, seat: 0, tone: "calm", text: `第 ${i} 条解说` }));
+    reply(200, chatBody(JSON.stringify({ segments })));
+  });
+  try {
+    store.createMatch({ id: "m-split", status: "running", mapId: MAP.mapId, mapVersion: MAP.version, rulesetVersion: DEFAULT_RULESET.version, scriptProtocolVersion: "p1.1", seed: 1, seatCount: 2, turnIntervalMs: 50, config: {} });
+    store.savePlayer("m-split", 1, { modelId: "m1", name: "甲", status: "OK" });
+    store.savePlayer("m-split", 2, { modelId: "m2", name: "乙", status: "OK" });
+    store.saveReplay("m-split", sampleEvents(), [stats(1), stats(2)] as never);
+    store.setMatchStatus("m-split", "finished", { endedAt: new Date().toISOString() });
+
+    saveCommentaryConfig(store, masterKey, { baseUrl: `http://127.0.0.1:${fake.port}/v1`, modelId: "thinker", apiKey: "sk-test", auto: false });
+    const res = await generateCommentary({ store, masterKey, getMap: () => MAP }, "m-split");
+    assert.equal(res.ok, true, res.error);
+    const row = store.getCommentary("m-split")!;
+    assert.equal(row.status, "ready");
+    assert.ok(row.segments.length >= 3, `拆批重问后应当仍有解说，实际 ${row.segments.length}`);
+    for (const s of row.segments) {
+      assert.ok(!/think/i.test(s.text), `不能把思维链当解说词：${s.text.slice(0, 60)}`);
+    }
+    assert.ok(row.usage!.calls >= 2, "应当多调用了一次（拆批重问）");
   } finally {
     await fake.close();
     store.close();

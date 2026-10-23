@@ -44,8 +44,13 @@ export const COMMENTARY_KEYS = {
 export const COMMENTARY_DEFAULTS = {
   auto: true,
   temperature: 0.7,
-  maxTokens: 1400,
-  timeoutMs: 60_000,
+  // 4000 而不是 1400：推理模型（MiniMax-M3、DeepSeek-R1 这类）的"思考 token"也算在
+  // max_tokens 里，额度太小会把输出截断成半截 JSON（2026-10-22 实测踩过）。
+  // max_tokens 只是上限，不会多花钱——模型写多少算多少。
+  maxTokens: 6000,
+  // 单次调用 180s：推理模型（MiniMax-M3）实测 12 条事实要 ~60s，思考 token 吃得多，
+  // 60s/120s 都会误杀（表现为"请求超时"）。
+  timeoutMs: 180_000,
 };
 
 function clampNumber(raw: string | null, fallback: number, lo: number, hi: number, integer = true): number {
@@ -69,7 +74,7 @@ export function loadLlmSettings(store: Store, masterKey: Buffer): LlmSettings | 
     modelId,
     apiKey,
     temperature: clampNumber(store.getSetting(COMMENTARY_KEYS.temperature), COMMENTARY_DEFAULTS.temperature, 0, 2, false),
-    maxTokens: clampNumber(store.getSetting(COMMENTARY_KEYS.maxTokens), COMMENTARY_DEFAULTS.maxTokens, 128, 8192),
+    maxTokens: clampNumber(store.getSetting(COMMENTARY_KEYS.maxTokens), COMMENTARY_DEFAULTS.maxTokens, 128, 16384),
     timeoutMs: clampNumber(store.getSetting(COMMENTARY_KEYS.timeoutMs), COMMENTARY_DEFAULTS.timeoutMs, 5_000, 300_000),
   };
 }
@@ -93,7 +98,7 @@ export function readCommentaryConfig(store: Store, masterKey: Buffer): Commentar
     hasApiKey: Boolean(apiKey),
     auto: isAutoEnabled(store),
     temperature: clampNumber(store.getSetting(COMMENTARY_KEYS.temperature), COMMENTARY_DEFAULTS.temperature, 0, 2, false),
-    maxTokens: clampNumber(store.getSetting(COMMENTARY_KEYS.maxTokens), COMMENTARY_DEFAULTS.maxTokens, 128, 8192),
+    maxTokens: clampNumber(store.getSetting(COMMENTARY_KEYS.maxTokens), COMMENTARY_DEFAULTS.maxTokens, 128, 16384),
     timeoutMs: clampNumber(store.getSetting(COMMENTARY_KEYS.timeoutMs), COMMENTARY_DEFAULTS.timeoutMs, 5_000, 300_000),
     updatedAt: store.getSetting(COMMENTARY_KEYS.updatedAt),
     stats: store.commentaryStats(),

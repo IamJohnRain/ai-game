@@ -96,7 +96,7 @@ export function CommentaryPanel(props: CommentaryPanelProps) {
                 </button>
                 <p className="muted small">
                   生成会用你在「解说设置」里配的模型，对双方的关键行为（交火、阵亡、踩雷、举盾、提交、比分变化）逐段写解说词；
-                  一般 3~6 次调用，几秒钟出稿。
+                  一般 3~6 次调用。普通模型几秒钟出稿，推理模型（会先"想"一遍）可能要几分钟。
                 </p>
               </>
             ) : (

@@ -20,6 +20,11 @@ export interface LlmReply {
   text: string;
   usage: { promptTokens: number; completionTokens: number; totalTokens: number } | null;
   ms: number;
+  /**
+   * 模型的结束原因：`length` = 输出被 max_tokens 截断（推理模型很常见：思考 token 也算在里面）。
+   * 调用方可以据此判断"这次的内容是不是完整的"。
+   */
+  finishReason: string | null;
 }
 
 export interface ChatOptions {
@@ -117,7 +122,7 @@ export async function chat(settings: LlmSettings, messages: LlmMessage[], opts: 
       throw new Error(`返回的不是 JSON（可能地址指向了网页而不是 API）：${raw.slice(0, 200)}`);
     }
     const parsed = body as {
-      choices?: { message?: { content?: unknown } }[];
+      choices?: { message?: { content?: unknown }; finish_reason?: string }[];
       usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
       error?: { message?: unknown };
     };
@@ -133,7 +138,7 @@ export async function chat(settings: LlmSettings, messages: LlmMessage[], opts: 
           totalTokens: Math.max(0, Math.round(parsed.usage.total_tokens ?? 0)),
         }
       : null;
-    return { text, usage, ms: Date.now() - started };
+    return { text, usage, ms: Date.now() - started, finishReason: parsed.choices?.[0]?.finish_reason ?? null };
   } finally {
     clearTimeout(timer);
   }

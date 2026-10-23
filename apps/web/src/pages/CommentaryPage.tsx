@@ -18,8 +18,8 @@ export function CommentaryPage({ onOpenReplay }: { onOpenReplay?: () => void }) 
   const [apiKey, setApiKey] = useState("");
   const [auto, setAuto] = useState(true);
   const [temperature, setTemperature] = useState("0.7");
-  const [maxTokens, setMaxTokens] = useState("1400");
-  const [timeoutMs, setTimeoutMs] = useState("60000");
+  const [maxTokens, setMaxTokens] = useState("6000");
+  const [timeoutMs, setTimeoutMs] = useState("180000");
 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
@@ -155,7 +155,7 @@ export function CommentaryPage({ onOpenReplay }: { onOpenReplay?: () => void }) 
           </label>
           <label className="field">
             <span>单次最大输出 tokens</span>
-            <input type="number" min={128} max={8192} step={64} value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)} />
+            <input type="number" min={128} max={16384} step={64} value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)} />
           </label>
           <label className="field">
             <span>超时（毫秒）</span>
@@ -206,6 +206,8 @@ export function CommentaryPage({ onOpenReplay }: { onOpenReplay?: () => void }) 
           <li>
             调用方式：`POST {baseUrl}/chat/completions`，一局约 3~6 次调用（事件流按"关键行为"压缩后分段送入）。
             失败会把原因写在稿子状态里（401 = 密钥、404 = 地址或模型名、超时 = 网络/限流）。
+            推理模型（会先"想"一遍的那种，如 MiniMax-M3、DeepSeek-R1）单次要几十秒，一局可能几分钟；
+            「单次最大输出 tokens」要留够——思考 token 也算在里面，额度太小会把输出截成半截 JSON。
           </li>
           <li>
             密钥安全：apiKey 用 data/master.key 加密后存在 data/ai-game.db，接口只回掩码；

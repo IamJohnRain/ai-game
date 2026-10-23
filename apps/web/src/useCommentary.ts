@@ -6,7 +6,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, type CommentaryState } from "./api";
 
 const POLL_MS = 2500;
-const POLL_LIMIT = 96; // ≈4 分钟：足够 6 次调用跑完，超了就停下让用户自己重试
+// ≈25 分钟：普通模型几秒就完事，但推理模型（MiniMax-M3 之类）一次要 60 秒上下，
+// 最多 8 次调用串行下来可能十几分钟——窗口太短会让前端先放弃，后端却还在生成。
+const POLL_LIMIT = 600;
 
 export interface CommentaryHook {
   state: CommentaryState | null;

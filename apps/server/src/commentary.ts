@@ -31,9 +31,25 @@ export interface TimelineInput {
   rules: Ruleset;
 }
 
-/** 条目上限与调用上限：长局也不能把额度一次打光 */
-export const MAX_ENTRIES = 200;
+/**
+ * 条目上限与调用上限：长局也不能把额度一次打光。
+ * FACTS_PER_CALL 是"一次调用塞多少条事实"：一条事实通常对应一条解说，
+ * 事实越多输出越长，再加上推理模型自己的思考 token（MiniMax-M3 之类能吃掉一两千），
+ * 一次给太多就会把 max_tokens 撑爆、输出半截 JSON（2026-10-22 实测踩过）。
+ * SEGMENTS_PER_CALL 是"一次调用最多写几条解说"——硬上限，由提示词强制，
+ * 事实多就合并（合并规则写进提示词：相邻的移动/加油一句话带过）。
+ * 三者的关系：MAX_ENTRIES = MAX_CALLS × FACTS_PER_CALL，
+ * 即"最多 6 段、每段 12 条事实、每段最多 10 条解说"；某段失败可再拆成两半重问（额外 ≤2 次），
+ * 一局的模型调用总数硬闸在 MAX_TOTAL_CALLS。
+ */
+export const MAX_ENTRIES = 72;
 export const MAX_CALLS = 6;
+export const FACTS_PER_CALL = 12;
+export const SEGMENTS_PER_CALL = 10;
+/** 某一批失败后"对半拆开重问"的额外调用上限（拆一次多花一次调用，所以要有闸） */
+export const MAX_SPLIT_CALLS = 2;
+/** 一局最多调用模型几次：分段 6 次 + 拆批重问 2 次。硬闸——拆批会级联，没有它就刹不住车。 */
+export const MAX_TOTAL_CALLS = MAX_CALLS + MAX_SPLIT_CALLS;
 
 /** 规则版本 → Ruleset（"1.2-scout" 这种变体也能解析出来；认不出就用默认规则） */
 export function rulesetForVersion(version: string): Ruleset {
@@ -275,10 +291,12 @@ export function clampEntries(entries: TimelineEntry[]): TimelineEntry[] {
   const keep = new Set<TimelineEntry["kind"]>(["intro", "death", "mine", "defend", "penalty", "end"]);
   const important = entries.filter((e) => keep.has(e.kind));
   const rest = entries.filter((e) => !keep.has(e.kind));
-  const budget = Math.max(1, MAX_ENTRIES - important.length);
+  // 重要条目自己就可能超预算（死得多的局）：那就只留最靠前的那些，其余照样按抽稀处理
+  const keptImportant = important.slice(0, MAX_ENTRIES);
+  const budget = Math.max(1, MAX_ENTRIES - keptImportant.length);
   const step = Math.max(1, Math.ceil(rest.length / budget));
   const sampled = rest.filter((_, idx) => idx % step === 0);
-  return [...important, ...sampled].sort((a, b) => a.i - b.i);
+  return [...keptImportant, ...sampled].sort((a, b) => a.i - b.i);
 }
 
 // ---------------------------------------------------------------- 提示词与解析
@@ -288,10 +306,11 @@ const SYSTEM_PROMPT = [
   "你会拿到一份**已经压缩过的事实时间线**：每行以 [i=事件下标][R回合] 开头，后面是该回合发生的关键行为。",
   "请为这些事实写解说词，要求：",
   "1) 只说事实行里写明的信息，不要虚构没出现的动作、位置或数值；",
-  "2) 有节奏：走动与补给一句带过，阵亡 / 踩雷 / 举盾 / 被盾弹开 / 比分反超 要写成关键时刻；",
+  "2) 有节奏：走动与补给一句带过，阵亡 / 踩雷 / 举盾 / 被弹开 / 比分反超 要写成关键时刻；",
   "3) 点出双方的意图与后果（例如“他举盾换一轮喘息”“这一趟提交把比分反超”），不吹不黑；",
   "4) 一行事实写一句，也可以把相邻两三行合并成一句；但**不要遗漏阵亡、踩雷、举盾、提交这四类**；",
   "5) 每条最多 120 个汉字，不要复述规则、不要输出 Markdown。",
+  `6) **本批最多写 ${SEGMENTS_PER_CALL} 条**：事实多于 ${SEGMENTS_PER_CALL} 条时，优先给阵亡/踩雷/举盾/提交写解说，走动与加油合并成一句带过。`,
   "",
   '输出必须是严格 JSON：{"segments":[{"i":<照抄事实行的 i>,"round":<回合数>,"seat":<0=中立/1/2/3/4>,"tone":"calm|hot|fun","text":"解说词"}]}',
   "i 必须是输入事实行里出现过的整数，不要自己编，也不要输出 JSON 之外的任何内容。",
@@ -299,17 +318,60 @@ const SYSTEM_PROMPT = [
 
 export function chunkEntries(entries: TimelineEntry[]): TimelineEntry[][] {
   if (entries.length === 0) return [];
-  const calls = Math.min(MAX_CALLS, Math.max(1, Math.ceil(entries.length / 18)));
+  // 每批的事实条数：标称 FACTS_PER_CALL，但总批数不能超过 MAX_CALLS，
+  // 所以条目多时按「批数上限」摊开（事实更多 → 每批更多，由提示词让模型自己合并成 10 条解说）。
+  const calls = Math.min(MAX_CALLS, Math.max(1, Math.ceil(entries.length / FACTS_PER_CALL)));
   const size = Math.ceil(entries.length / calls);
   const chunks: TimelineEntry[][] = [];
   for (let i = 0; i < entries.length; i += size) chunks.push(entries.slice(i, i + size));
   return chunks;
 }
 
+/**
+ * 去掉推理模型（MiniMax-M3、DeepSeek-R1 之类）正文前的"思维链"。
+ * 它们的 `content` 形如 `<think>……</think>{"segments":[…]}`：思维链里常有花括号、
+ * 甚至示例 JSON，直接丢给 JSON 解析会从推理块里的第一个 `{` 开始配对 → 解析出垃圾或 null。
+ * 没闭合的（被 max_tokens 截断）同样要丢：后面整段都是推理，没有可用答案。
+ * **整段都是思维链时返回空串**——那表示模型把额度全花在"想"上、没给出正文，
+ * 调用方要当"这一批没有内容"处理，不能把自言自语当成解说词贴到看板上。
+ */
+export function stripReasoning(text: string): string {
+  if (!/<\s*think/i.test(text)) return text;
+  return text
+    .replace(/<\s*think[^>]*>[\s\S]*?<\/\s*think\s*>/gi, "")
+    .replace(/<\s*think[^>]*>[\s\S]*$/gi, "")
+    .trim();
+}
+
+/**
+ * 从**被截断**的 JSON 里抢救出已经写完整的那几条 segment。
+ * 推理模型（MiniMax-M3 这类）的思考 token 也算在 max_tokens 里，额度不够时
+ * JSON 会停在半路（`{"segments":[{"i":122,…},{"i":184,…},{"i":253,"rou`）——
+ * 整段解析必然失败，但前面写完的几条是好的，不该整批丢掉。
+ */
+export function salvageSegments(text: string): unknown[] {
+  const cleaned = stripReasoning(text);
+  const out: unknown[] = [];
+  const re = /\{[^{}]*\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(cleaned)) !== null) {
+    const slice = m[0];
+    if (!/"i"\s*:/.test(slice) || !/"text"\s*:/.test(slice)) continue;
+    try {
+      const obj = JSON.parse(slice) as unknown;
+      if (obj && typeof obj === "object" && !Array.isArray(obj)) out.push(obj);
+    } catch {
+      /* 不是合法 JSON（多半是被截断的半条）→ 跳过 */
+    }
+  }
+  return out;
+}
+
 /** 宽容地取出 JSON：模型常带 ```json 围栏或前后废话，甚至只回一个平衡的数组/对象 */
 export function extractJson(text: string): unknown | null {
-  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
-  const candidates = [fenced?.[1], text].filter((c): c is string => typeof c === "string");
+  const cleaned = stripReasoning(text);
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(cleaned);
+  const candidates = [fenced?.[1], cleaned].filter((c): c is string => typeof c === "string");
   for (const c of candidates) {
     const trimmed = c.trim();
     try {
@@ -431,12 +493,22 @@ export async function generateCommentary(deps: CommentaryDeps, matchId: string):
   if (timeline.length === 0) return { ok: false, error: "事件流里没有可解说的内容" };
 
   const roster = players.map((p) => `P${p.seat} = ${p.name}（模型 ${p.modelId}）`).join("；");
-  const chunks = chunkEntries(timeline);
+  // 待解说的分段放在队列里：某一批失败（模型把额度全花在"想"上、没吐出 JSON）时，
+  // 把它对半拆开再问一次——推理模型在小批量上成功率高得多。拆批的额外调用有上限。
+  const queue: TimelineEntry[][] = chunkEntries(timeline);
   const segments: CommentarySegment[] = [];
   const usage: CommentaryUsage = { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, ms: 0 };
+  let planned = queue.length;
+  let ci = 0;
 
-  for (let ci = 0; ci < chunks.length; ci++) {
-    const chunk = chunks[ci]!;
+  while (queue.length > 0) {
+    // 硬闸：整局的模型调用次数有上限。拆批会级联（拆出来的一半也可能再失败再拆），
+    // 没有这道闸就刹不住车——一次解说能把额度烧光。
+    if (usage.calls >= MAX_TOTAL_CALLS) {
+      deps.logger?.warn?.(`解说已达到调用上限（${MAX_TOTAL_CALLS} 次），剩下的事实不再解说`);
+      break;
+    }
+    const chunk = queue.shift()!;
     const lines = chunk.map((e) => `[i=${e.i}][R${e.round}] ${e.text}`).join("\n");
     const history = segments.slice(-4).map((s) => `（你刚才说过：${s.text}）`).join("\n");
     const messages: LlmMessage[] = [
@@ -445,7 +517,7 @@ export async function generateCommentary(deps: CommentaryDeps, matchId: string):
         role: "user",
         content: [
           `本场对阵：${roster}；地图 ${map.mapId}@${map.version}；规则版本 ${match.rulesetVersion}。`,
-          `这是第 ${ci + 1}/${chunks.length} 段事实（按时间顺序；不要重复前面已经说过的事）。`,
+          `这是第 ${ci + 1} 段事实（按时间顺序；不要重复前面已经说过的事）。`,
           history,
           lines,
         ].filter(Boolean).join("\n"),
@@ -456,7 +528,7 @@ export async function generateCommentary(deps: CommentaryDeps, matchId: string):
       reply = await chat(settings, messages, { temperature: settings.temperature, maxTokens: settings.maxTokens });
     } catch (err) {
       // 调用失败就把原因交回去（不抛）：路由/UI 只认返回值，队列也只需要落库
-      return { ok: false, error: `第 ${ci + 1}/${chunks.length} 段调用失败：${errText(err)}` };
+      return { ok: false, error: `第 ${ci + 1} 段调用失败：${errText(err)}` };
     }
     usage.calls += 1;
     usage.ms += reply.ms;
@@ -465,11 +537,38 @@ export async function generateCommentary(deps: CommentaryDeps, matchId: string):
       usage.completionTokens += reply.usage.completionTokens;
       usage.totalTokens += reply.usage.totalTokens;
     }
+    ci += 1;
     const parsed = extractJson(reply.text);
     if (parsed === null) {
-      // 模型没按 JSON 回：把整段文本当一条解说挂在本批第一个锚点上，总比整场失败好
-      const first = chunk[0]!;
-      segments.push({ i: first.i, round: first.round, seat: 0, tone: "calm", text: reply.text.replace(/\s+/g, " ").trim().slice(0, 140) });
+      // 整段 JSON 解析不出来：三种常见原因，各有各的救法。
+      // 1) 输出被 max_tokens 截断（推理模型很常见：思考 token 也算在里面）→ 半截 JSON 里
+      //    前几条往往已经写完整了，把它们抢救出来，别把剩下的整批丢掉；
+      // 2) 模型把额度全花在"想"上、正文一个字没吐 → 这一批对半拆开再问一次（小批量成功率高得多）；
+      // 3) 模型压根没按 JSON 回（纯文本）→ 整段当一条解说挂在本批第一个锚点上，总比整场失败好。
+      const salvaged = salvageSegments(reply.text);
+      if (salvaged.length > 0) {
+        segments.push(...normalizeSegments(salvaged, chunk, chunk[0]!.round));
+        deps.logger?.warn?.(`解说第 ${ci} 段输出被截断，已抢救 ${salvaged.length} 条（finish_reason=${reply.finishReason ?? "?"}）`);
+        continue;
+      }
+      if (chunk.length > 1 && usage.calls < MAX_TOTAL_CALLS) {
+        const mid = Math.ceil(chunk.length / 2);
+        queue.unshift(chunk.slice(mid), chunk.slice(0, mid)); // 先前半后半，保持时间顺序
+        planned += 1;
+        deps.logger?.warn?.(`解说第 ${ci} 段没有产出，已拆成两半重问（${chunk.length} → ${mid}+${chunk.length - mid}）`);
+        continue;
+      }
+      // 实在救不回来：把纯文本当一条解说（先去掉思维链，否则展出来是一大段自言自语）。
+      // 但如果它看起来是**半截 JSON**（截断的迹象）或是整段思维链，宁可这一批空着，
+      // 也不要把 `{"segments":[{"i":122,…` 或"让我先想想…"这种原文当成解说词贴到看板上。
+      const plain = stripReasoning(reply.text).replace(/\s+/g, " ").trim();
+      const looksBroken = /^[[{]/.test(plain) || plain.includes('"segments"') || /<\s*\/?\s*think/i.test(plain);
+      if (plain.length > 0 && !looksBroken) {
+        const first = chunk[0]!;
+        segments.push({ i: first.i, round: first.round, seat: 0, tone: "calm", text: plain.slice(0, 140) });
+      } else {
+        deps.logger?.warn?.(`解说第 ${ci} 段输出无法解析，已跳过（finish_reason=${reply.finishReason ?? "?"}）`);
+      }
       continue;
     }
     segments.push(...normalizeSegments(parsed, chunk, chunk[0]!.round));
@@ -481,7 +580,7 @@ export async function generateCommentary(deps: CommentaryDeps, matchId: string):
   if (final.length === 0) return { ok: false, error: "模型没有返回可用的解说内容" };
 
   store.finishCommentary(matchId, { segments: final, usage, baseUrl: settings.baseUrl, modelId: settings.modelId });
-  deps.logger?.info?.(`解说已生成：${matchId}（${final.length} 段 / ${chunks.length} 次调用）`);
+  deps.logger?.info?.(`解说已生成：${matchId}（${final.length} 段 / ${usage.calls} 次调用，原计划 ${planned} 段）`);
   return { ok: true, segments: final.length };
 }
 

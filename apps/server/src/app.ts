@@ -351,7 +351,7 @@ function settleStaleCommentary(matchId: string): void {
   const row = store.getCommentary(matchId);
   if (!row || row.status !== "generating") return;
   const started = Date.parse(row.createdAt);
-  const budgetMs = 90_000 + 6 * 60_000; // 一次调用最多 90s × 最多 6 段，再宽一点
+  const budgetMs = 180_000 * 8 + 60_000; // 一次调用最多 180s × 最多 8 段（6 段 + 2 次拆批重问），再宽一点
   if (Number.isFinite(started) && Date.now() - started > budgetMs) {
     store.failCommentary(matchId, "生成中断（服务可能重启过），可以重新生成");
   }
